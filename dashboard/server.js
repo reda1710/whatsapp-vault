@@ -35,7 +35,7 @@ const app = express();
 // cors({ origin: false }) — intentional: dashboard is always same-origin.
 // For local dev on a different port, change to cors({ origin: 'http://localhost:PORT' })
 app.use(cors({ origin: false }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '100mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -56,14 +56,21 @@ const SEARCH_WINDOW_MS = 60000; // per 60 seconds
 
 function checkSearchRateLimit(userId) {
   const now = Date.now();
-  const key = userId;
-  let timestamps = searchRateLimitMap.get(key) || [];
+  let timestamps = searchRateLimitMap.get(userId) || [];
   timestamps = timestamps.filter(t => now - t < SEARCH_WINDOW_MS);
   if (timestamps.length >= SEARCH_LIMIT) return false;
   timestamps.push(now);
-  searchRateLimitMap.set(key, timestamps);
+  searchRateLimitMap.set(userId, timestamps);
   return true;
 }
+
+// Purge entries for users who have had no searches in the last window
+setInterval(() => {
+  const cutoff = Date.now() - SEARCH_WINDOW_MS;
+  for (const [userId, timestamps] of searchRateLimitMap) {
+    if (timestamps.every(t => t < cutoff)) searchRateLimitMap.delete(userId);
+  }
+}, SEARCH_WINDOW_MS);
 
 function sendSSE(client, event, data) {
   try { client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }

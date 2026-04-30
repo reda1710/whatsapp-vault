@@ -6,7 +6,7 @@ const fs       = require('fs');
 
 const DB_PATH   = path.join(__dirname, '..', 'vault.db');
 const MEDIA_DIR = path.join(__dirname, '..', 'media');
-const MAX_MEDIA_BYTES = 10 * 1024 * 1024; // 10 MB cap per file
+const MAX_MEDIA_BYTES = 100 * 1024 * 1024; // 100 MB cap per file
 
 if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
 

@@ -192,7 +192,7 @@ Code-level constants you can tune in `bot/session-manager.js`:
 | `QR_TIMEOUT` | 5 min | Restart the session if QR is never scanned |
 | `READY_TIMEOUT` | 40 s | Restart if WhatsApp Web doesn't load after authentication |
 | `RECONNECT_DELAY` | 8 s | Pause between failed start and the next attempt |
-| `MAX_MEDIA_BYTES` | 10 MB | (in `database.js`) Files larger than this are skipped |
+| `MAX_MEDIA_BYTES` | 100 MB | (in `database.js`) Files larger than this are skipped |
 
 ---
 
@@ -423,7 +423,7 @@ Yes — that's the core feature. Add as many accounts as RAM permits. Budget ~30
 In `media/` next to `vault.db`. Filenames are `<userId>_<waMessageId>.<ext>`.
 
 **How big is the database?**
-Pure text is tiny — millions of messages fit in under 1 GB. Media dominates disk usage; the 10 MB per-file cap stops single videos from filling your disk silently.
+Pure text is tiny — millions of messages fit in under 1 GB. Media dominates disk usage; the 100 MB per-file cap stops single videos from filling your disk silently.
 
 ---
 

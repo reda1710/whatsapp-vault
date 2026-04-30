@@ -2,6 +2,8 @@ node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
 vault.db
+vault.db-wal
+vault.db-shm
 media/
 *.log
 .env
