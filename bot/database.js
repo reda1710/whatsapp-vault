@@ -156,26 +156,28 @@ function deleteUser(id) {
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────────
-const HEARTBEAT_MS = 10000;
+const HEARTBEAT_MS = 30000; // 30s heartbeat
 let heartbeatTimer = null;
 
 function setBotOnline() {
   clearInterval(heartbeatTimer);
   stmts.setBotStatus.run('online');
   heartbeatTimer = setInterval(() => {
-    try { stmts.setBotStatus.run('online'); } catch (_) {}
+    try { stmts.setBotStatus.run('online'); }
+    catch (err) { console.warn(`⚠️  Heartbeat write failed:`, err.message); }
   }, HEARTBEAT_MS);
 }
 
 function setBotOffline() {
   clearInterval(heartbeatTimer);
-  try { stmts.setBotStatus.run('offline'); } catch (_) {}
+  try { stmts.setBotStatus.run('offline'); }
+  catch (err) { console.warn(`⚠️  Failed to set bot offline:`, err.message); }
 }
 
 function getBotStatus() {
   const row = stmts.getBotStatus.get();
   if (!row) return { online: false };
-  const stale = Math.floor(Date.now() / 1000) - row.beat_at > 30;
+  const stale = Math.floor(Date.now() / 1000) - row.beat_at > 90; // 90s stale threshold (3x heartbeat)
   return { online: row.state === 'online' && !stale, beat_at: row.beat_at };
 }
 
@@ -264,7 +266,12 @@ function deleteMessages(userId, ids) {
 
   const ph = safeIds.map(() => '?').join(',');
   const rows = db.prepare(`SELECT media_file FROM messages WHERE user_id = ? AND id IN (${ph})`).all(userId, ...safeIds);
-  rows.forEach(r => { if (r.media_file) try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); } catch (_) {} });
+  rows.forEach(r => {
+    if (r.media_file) {
+      try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
+      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); }
+    }
+  });
 
   const result = db.prepare(`DELETE FROM messages WHERE user_id = ? AND id IN (${ph})`).run(userId, ...safeIds);
 
@@ -284,7 +291,12 @@ function deleteMessages(userId, ids) {
 // ── Delete chat ──────────────────────────────────────────────────────────────
 function deleteChat(userId, chatId) {
   const rows = db.prepare('SELECT media_file FROM messages WHERE user_id = ? AND chat_id = ?').all(userId, chatId);
-  rows.forEach(r => { if (r.media_file) try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); } catch (_) {} });
+  rows.forEach(r => {
+    if (r.media_file) {
+      try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
+      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); }
+    }
+  });
   const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
   db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
   return { deleted: result.changes };

@@ -5,7 +5,7 @@ const qrcode               = require('qrcode-terminal');
 const qrcodeLib            = require('qrcode');
 const path                 = require('path');
 const fs                   = require('fs');
-const { execSync }         = require('child_process');
+const { spawnSync }        = require('child_process');
 const { EventEmitter }     = require('events');
 const db                   = require('./database');
 
@@ -28,7 +28,8 @@ const isHarmless = m => HARMLESS.some(s => m.includes(s));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function killChrome(userId) {
-  try { execSync(`pkill -9 -f "user-data-dir.*session-${userId}" 2>/dev/null; true`, { shell: true }); } catch (_) {}
+  try { spawnSync('pkill', ['-9', '-f', `user-data-dir.*session-${userId}`], { stdio: 'ignore' }); }
+  catch (err) { console.warn(`⚠️  Failed to kill Chrome for user ${userId}:`, err.message); }
 }
 
 function clearLock(userId) {
@@ -38,12 +39,18 @@ function clearLock(userId) {
     const scan = d => {
       for (const e of fs.readdirSync(d)) {
         const p = path.join(d, e);
-        if (e === 'SingletonLock') { try { fs.unlinkSync(p); } catch (_) {} }
-        else { try { if (fs.statSync(p).isDirectory()) scan(p); } catch (_) {} }
+        if (e === 'SingletonLock') {
+          try { fs.unlinkSync(p); }
+          catch (err) { console.warn(`⚠️  Failed to clear SingletonLock for user ${userId}:`, err.message); }
+        }
+        else {
+          try { if (fs.statSync(p).isDirectory()) scan(p); }
+          catch (err) { console.warn(`⚠️  Failed to scan directory ${p}:`, err.message); }
+        }
       }
     };
     scan(dir);
-  } catch (_) {}
+  } catch (err) { console.warn(`⚠️  Failed to clear lock for user ${userId}:`, err.message); }
 }
 
 // ── Session ──────────────────────────────────────────────────────────────────
@@ -57,15 +64,10 @@ class Session extends EventEmitter {
     this.readyTimer    = null;
     this.booting       = false;
     this.stopping      = false;
-    this.authenticated = false; // becomes true on first 'authenticated' event
+    this.authenticated = false;
     this.status        = 'offline'; // 'offline' | 'qr' | 'online'
     this.qrData        = null;      // latest QR as base64 PNG data URL
-
-    // Sequential queue for late media fetches. Sending several stickers in
-    // quick succession would otherwise schedule N parallel retry chains
-    // that all hammer downloadMedia() at once and overload the WA bridge,
-    // exactly like the original burst-of-images bug. One in flight at a time.
-    this.lateMediaQueue       = [];
+    this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
     this.processingLateMedia  = false;
   }
 
@@ -110,7 +112,7 @@ class Session extends EventEmitter {
       // Convert QR string to base64 PNG for the dashboard
       try {
         this.qrData = await qrcodeLib.toDataURL(qr);
-      } catch (_) { this.qrData = null; }
+      } catch (err) { console.warn(`⚠️  Failed to generate QR data URL:`, err.message); this.qrData = null; }
 
       this._setStatus('qr');
       this.emit('qr', { userId: this.userId, qr: this.qrData });
@@ -177,7 +179,7 @@ class Session extends EventEmitter {
         const name  = info?.pushname  || this.userName;
         db.updateUser(this.userId, name, phone, 'online');
         this.userName = name;
-      } catch (_) {}
+      } catch (err) { console.warn(`⚠️  Failed to fetch WhatsApp info for user ${this.userId}:`, err.message); }
 
       db.setBotOnline();
       this.emit('ready', { userId: this.userId, name: this.userName });
@@ -190,7 +192,8 @@ class Session extends EventEmitter {
       console.error(`❌ [${this.userName}] Auth failed:`, msg);
       db.updateUser(this.userId, this.userName, null, 'offline');
       await this._destroy();
-      try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); }
+      catch (err) { console.warn(`⚠️  Failed to remove auth folder for user ${this.userId}:`, err.message); }
       await sleep(RECONNECT_DELAY);
       setTimeout(() => this.start(), 0);
     });
@@ -246,7 +249,7 @@ class Session extends EventEmitter {
     const c = this.client;
     this.client = null;
     if (!c) return;
-    try { await c.destroy(); } catch (_) {}
+    try { await c.destroy(); } catch (err) { console.warn(`⚠️  Error destroying client for user ${this.userId}:`, err.message); }
     await sleep(1500);
     killChrome(this.userId);
     clearLock(this.userId);
@@ -376,9 +379,9 @@ class Session extends EventEmitter {
               type:     msg.type,
               fromMe:   msg.fromMe,
             });
-            break; // success, move to next queued item
+            break;
           }
-        } catch (_) { /* try next delay */ }
+        } catch (err) { console.warn(`⚠️  Late-media retry failed (${delay}ms):`, err.message); }
       }
     }
     this.processingLateMedia = false;
@@ -443,7 +446,8 @@ class SessionManager extends EventEmitter {
       this.sessions.delete(userId);
     }
     // Remove session auth folder
-    try { fs.rmSync(path.join(AUTH_BASE, `session-${userId}`), { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(path.join(AUTH_BASE, `session-${userId}`), { recursive: true, force: true }); }
+    catch (err) { console.warn(`⚠️  Failed to remove auth folder for user ${userId}:`, err.message); }
     db.deleteUser(userId);
   }
 

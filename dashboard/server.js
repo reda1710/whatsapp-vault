@@ -35,7 +35,7 @@ const app = express();
 // cors({ origin: false }) — intentional: dashboard is always same-origin.
 // For local dev on a different port, change to cors({ origin: 'http://localhost:PORT' })
 app.use(cors({ origin: false }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -49,8 +49,25 @@ app.use('/api', (req, res, next) => {
 // ── SSE — real-time events to dashboard ──────────────────────────────────────
 const sseClients = new Set();
 
+// ── Rate limiting ────────────────────────────────────────────────────────────
+const searchRateLimitMap = new Map(); // userId → [timestamps...]
+const SEARCH_LIMIT = 30; // max searches
+const SEARCH_WINDOW_MS = 60000; // per 60 seconds
+
+function checkSearchRateLimit(userId) {
+  const now = Date.now();
+  const key = userId;
+  let timestamps = searchRateLimitMap.get(key) || [];
+  timestamps = timestamps.filter(t => now - t < SEARCH_WINDOW_MS);
+  if (timestamps.length >= SEARCH_LIMIT) return false;
+  timestamps.push(now);
+  searchRateLimitMap.set(key, timestamps);
+  return true;
+}
+
 function sendSSE(client, event, data) {
-  try { client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) {}
+  try { client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+  catch (err) { console.warn(`⚠️  SSE write failed (${event}):`, err.message); }
 }
 
 function broadcast(event, data) {
@@ -79,7 +96,10 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => sseClients.delete(res));
 
   // Keep-alive ping every 25s
-  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) { clearInterval(ping); } }, 25000);
+  const ping = setInterval(() => {
+    try { res.write(': ping\n\n'); }
+    catch (err) { console.warn(`⚠️  SSE ping failed:`, err.message); clearInterval(ping); }
+  }, 25000);
   req.on('close', () => clearInterval(ping));
 });
 
@@ -180,6 +200,12 @@ app.get('/api/search', (req, res) => {
     const userId = parseInt(req.query.userId, 10);
     const q      = (req.query.q || '').trim();
     if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    // Rate limit: max 30 searches per 60s per user
+    if (!checkSearchRateLimit(userId)) {
+      return res.status(429).json({ error: 'Search rate limit exceeded (30 per 60s)' });
+    }
+
     res.json(q ? db.searchMessages(userId, q) : []);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -209,7 +235,6 @@ app.get('/api/media/:filename', (req, res) => {
   if (!fs.existsSync(p)) return res.status(404).json({ error: 'File not found' });
 
   // Try DB-stored mimetype first (most accurate), fall back to extension lookup.
-  // This catches old .bin files that have a stored mimetype but unknown extension.
   let mime = db.getMimetypeForFile(req.params.filename);
   if (mime) mime = String(mime).split(';')[0].trim();
   if (!mime) {
@@ -217,7 +242,35 @@ app.get('/api/media/:filename', (req, res) => {
     mime = MIME_MAP[ext];
   }
   if (mime) res.setHeader('Content-Type', mime);
-  res.sendFile(p);
+
+  // Get file size for range support
+  const stat = fs.statSync(p);
+  const fileSize = stat.size;
+
+  // Handle HTTP range requests (for seeking in media players, resumable downloads)
+  const range = req.headers.range;
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    // Validate range
+    if (isNaN(start) || start < 0 || end >= fileSize || start > end) {
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.status(416).json({ error: 'Range not satisfiable' });
+    }
+
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader('Content-Length', end - start + 1);
+    res.setHeader('Accept-Ranges', 'bytes');
+    const stream = fs.createReadStream(p, { start, end });
+    stream.pipe(res);
+  } else {
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Length', fileSize);
+    res.sendFile(p);
+  }
 });
 
 // ── Delete ────────────────────────────────────────────────────────────────────
