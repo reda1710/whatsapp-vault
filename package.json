@@ -1,0 +1,18 @@
+{
+  "name": "whatsapp-vault",
+  "version": "1.0.1",
+  "description": "Real-time multi-user WhatsApp backup bot + dashboard",
+  "main": "bot/index.js",
+  "scripts": {
+    "start": "node bot/index.js",
+    "migrate": "node migrate-bin-files.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "^1.23.0",
+    "qrcode-terminal": "^0.12.0",
+    "qrcode": "^1.5.3",
+    "better-sqlite3": "^9.4.3",
+    "express": "^4.18.3",
+    "cors": "^2.8.5"
+  }
+}

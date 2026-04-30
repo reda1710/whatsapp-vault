@@ -1,0 +1,2331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WhatsApp Vault</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%2325d366'/><path d='M8.886 7.17c.183.005.386.015.579.443.128.286.343.81.519 1.238.137.333.249.607.277.663.064.128.104.276.02.448l-.029.058c-.067.14-.115.24-.229.37-.046.054-.095.113-.143.171-.085.103-.17.205-.242.277-.129.128-.262.266-.114.522.149.256.668 1.098 1.435 1.778.824.734 1.541 1.043 1.903 1.2.07.03.127.054.169.075.258.128.41.108.56-.064.148-.172.643-.748.816-1.004.169-.256.341-.217.578-.128.238.088 1.504.71 1.762.838.05.026.099.048.143.07.179.085.3.144.352.231.064.108.064.62-.149 1.221-.218.6-1.266 1.176-1.741 1.221-.045.004-.09.01-.136.015-.435.053-.988.12-2.957-.655-2.425-.954-4.026-3.32-4.35-3.798l-.058-.077c-.147-.197-1.048-1.403-1.048-2.647 0-1.19.586-1.81.853-2.092.017-.018.033-.035.047-.05.237-.256.514-.32.687-.32.173 0 .346 0 .495.005z' fill='white'/><path fill-rule='evenodd' clip-rule='evenodd' d='M2.184 21.331c-.082.297.188.572.486.494l4.608-1.204c1.454.788 3.092 1.207 4.759 1.207h.005c5.486 0 9.958-4.446 9.958-9.911 0-2.65-1.034-5.14-2.914-7.011C17.207 3.034 14.708 2 12.042 2 6.556 2 2.084 6.446 2.084 11.911c-.001 1.74.458 3.448 1.331 4.954l-1.231 4.466zm2.677-4.069c.107-.387.054-.802-.148-1.15-.74-1.278-1.13-2.728-1.129-4.202 0-4.63 3.794-8.411 8.458-8.411 2.27 0 4.388.877 5.986 2.468 1.597 1.59 2.472 3.698 2.472 5.948 0 4.63-3.793 8.411-8.458 8.411h-.005c-1.417 0-2.809-.355-4.045-1.025-.335-.181-.726-.229-1.094-.132l-2.762.722.725-2.629z' fill='white'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0e0f11;
+    --surface:  #16181c;
+    --panel:    #1c1e24;
+    --border:   #2a2d35;
+    --border2:  #353840;
+    --accent:   #25d366;
+    --accent2:  #1aab52;
+    --amber:    #f5a623;
+    --coral:    #ff6b6b;
+    --blue:     #4a9eff;
+    --text:     #e8e9eb;
+    --muted:    #6b7280;
+    --subtle:   #9ca3af;
+    --mono:     'DM Mono', monospace;
+    --sans:     'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Top bar ─────────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 20px;
+    height: 56px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.02em;
+  }
+
+  .logo-icon {
+    width: 28px;
+    height: 28px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dot-live {
+    width: 7px;
+    height: 7px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+    margin-left: auto;
+  }
+
+  @keyframes pulse {
+    0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(37,211,102,.4); }
+    50%      { opacity: .7; box-shadow: 0 0 0 5px rgba(37,211,102,0); }
+  }
+
+  .live-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: .08em;
+  }
+
+  .live-label.offline {
+    color: var(--coral);
+  }
+
+  .search-wrap {
+    flex: 1;
+    max-width: 360px;
+    position: relative;
+  }
+
+  .search-wrap input {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 12px 7px 34px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    outline: none;
+    transition: border-color .2s;
+  }
+
+  .search-wrap input:focus { border-color: var(--border2); }
+  .search-wrap input::placeholder { color: var(--muted); }
+
+  .search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 14px;
+    pointer-events: none;
+  }
+
+  /* ── Stats bar ───────────────────────────────────── */
+  .statsbar {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .stat {
+    padding: 10px 20px;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .stat:last-child { border-right: none; }
+
+  .stat-num {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: var(--text);
+  }
+
+  .stat-lbl {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  .stat-num.green { color: var(--accent); }
+  .stat-num.amber { color: var(--amber); }
+  .stat-num.blue  { color: var(--blue); }
+  .stat-num.coral { color: var(--coral); }
+
+  /* ── Main layout ─────────────────────────────────── */
+  .main {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ─────────────────────────────────────── */
+  .sidebar {
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-head {
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .chat-list {
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .chat-list::-webkit-scrollbar { width: 4px; }
+  .chat-list::-webkit-scrollbar-track { background: transparent; }
+  .chat-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .chat-item {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 11px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background .12s;
+    position: relative;
+  }
+
+  .chat-item:hover { background: var(--panel); }
+  .chat-item.active { background: var(--panel); }
+
+  .chat-item.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+  }
+
+  .avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--border2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+    letter-spacing: -0.02em;
+  }
+
+  .chat-meta { flex: 1; min-width: 0; }
+  .chat-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: -0.01em;
+  }
+
+  .chat-preview {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+
+  .chat-time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  .chat-count {
+    background: var(--accent);
+    color: #000;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+
+  /* ── Chat area ───────────────────────────────────── */
+  .chat-area {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .chat-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .chat-header .name {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .chat-header .sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 1px;
+  }
+
+  .filter-bar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+
+  .filter-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .filter-btn:hover { border-color: var(--border2); color: var(--subtle); }
+  .filter-btn.active { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 500; }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-track { background: transparent; }
+  .messages::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  /* ── Message bubbles ─────────────────────────────── */
+  .msg-row {
+    display: flex;
+    flex-direction: column;
+    max-width: 72%;
+  }
+
+  .msg-row.me { align-self: flex-end; align-items: flex-end; }
+  .msg-row.them { align-self: flex-start; align-items: flex-start; }
+
+  .msg-sender {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 3px;
+    letter-spacing: .04em;
+  }
+
+  .bubble {
+    padding: 9px 13px;
+    border-radius: 14px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    word-break: break-word;
+  }
+
+  .msg-row.me .bubble {
+    background: #1a3329;
+    border-color: #1f4035;
+    border-bottom-right-radius: 4px;
+  }
+
+  .msg-row.them .bubble {
+    border-bottom-left-radius: 4px;
+  }
+
+  .msg-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* ── Voice note ──────────────────────────────────── */
+  .voice-bubble {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    min-width: 220px;
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+
+  .voice-bubble:hover { border-color: var(--accent); }
+
+  .play-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background .15s, transform .1s;
+    color: #000;
+    font-size: 12px;
+    padding-left: 2px;
+  }
+
+  .play-btn:hover { background: var(--accent2); transform: scale(1.05); }
+  .play-btn.playing { padding-left: 0; }
+
+  .waveform {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 28px;
+  }
+
+  .wave-bar {
+    width: 3px;
+    background: var(--border2);
+    border-radius: 2px;
+    transition: background .2s;
+  }
+
+  .voice-bubble:hover .wave-bar { background: var(--accent); opacity: .6; }
+  .wave-bar.active { background: var(--accent) !important; opacity: 1; }
+
+  .voice-dur {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  /* ── Image bubble ────────────────────────────────── */
+  .img-bubble {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    max-width: 260px;
+    transition: border-color .15s;
+  }
+
+  .img-bubble:hover { border-color: var(--border2); }
+
+  .img-bubble img {
+    width: 100%;
+    display: block;
+    max-height: 200px;
+    object-fit: cover;
+  }
+
+  .img-meta {
+    padding: 6px 10px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--panel);
+  }
+
+  /* ── Doc bubble ──────────────────────────────────── */
+  .doc-bubble {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+
+  .doc-bubble:hover { border-color: var(--blue); }
+
+  .doc-icon {
+    width: 32px;
+    height: 32px;
+    background: var(--blue);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+    color: #000;
+  }
+
+  .doc-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .doc-size {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── Empty / loading states ──────────────────────── */
+  .empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--muted);
+  }
+
+  .empty-icon {
+    width: 56px;
+    height: 56px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+  }
+
+  .empty h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--subtle);
+    letter-spacing: -0.01em;
+  }
+
+  .empty p {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    max-width: 260px;
+    line-height: 1.6;
+  }
+
+  .empty-list {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* ── Lightbox ────────────────────────────────────── */
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.9);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .lightbox.open { display: flex; }
+
+  .lightbox img {
+    max-width: 90vw;
+    max-height: 80vh;
+    border-radius: 8px;
+    object-fit: contain;
+  }
+
+  .lightbox-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ── Search results ──────────────────────────────── */
+  .search-results {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .search-results.open { display: flex; }
+
+  .search-result-item {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background .12s;
+  }
+
+  .search-result-item:hover { background: var(--panel); }
+
+  .sr-chat {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: .04em;
+    margin-bottom: 3px;
+  }
+
+  .sr-body {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.4;
+  }
+
+  .sr-time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+
+  /* ── Scrollbar global ────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  /* ── Spinner ─────────────────────────────────────── */
+  .spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border2);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+
+  .tag.group { border-color: #2a3d2a; color: var(--accent); background: #1a2e1a; }
+
+  /* ── Select / Delete UI ─────────────────────────────────────────────── */
+
+  /* Chat item delete button — sits between chat-meta and the time/count column */
+  .del-chat-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color .15s, background .15s;
+  }
+  .chat-item:hover .del-chat-btn { display: flex; }
+  .del-chat-btn:hover { color: var(--coral); background: rgba(255,107,107,.1); }
+
+  /* Select toggle button */
+  .filter-btn.select-toggle { margin-left: auto; }
+  .filter-btn.select-toggle.active { background: var(--amber); border-color: var(--amber); color: #000; }
+
+  /* Action bar — shown in select mode */
+  .action-bar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: #1c1a10;
+    border-bottom: 1px solid #3a3010;
+    flex-shrink: 0;
+  }
+  .action-bar.visible { display: flex; }
+  .sel-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--amber);
+    letter-spacing: .06em;
+    margin-right: 4px;
+    flex-shrink: 0;
+  }
+  .btn-ghost {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--subtle);
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .btn-ghost:hover { border-color: var(--border2); color: var(--text); background: var(--panel); }
+  .btn-danger {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,107,107,.4);
+    background: rgba(255,107,107,.1);
+    color: var(--coral);
+    cursor: pointer;
+    transition: all .15s;
+    margin-left: auto;
+  }
+  .btn-danger:hover { background: rgba(255,107,107,.2); border-color: var(--coral); }
+
+  /* Per-message wrapper in select mode */
+  .msg-wrap {
+    display: flex;
+    align-items: center;   /* center delete button vertically with the bubble */
+    gap: 8px;
+    position: relative;
+  }
+  .msg-wrap.me { flex-direction: row-reverse; }
+
+  /* Checkbox */
+  .msg-check {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border2);
+    background: var(--panel);
+    flex-shrink: 0;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    transition: border-color .15s, background .15s;
+  }
+  .select-mode .msg-check { display: flex; }
+  .msg-wrap.checked .msg-check {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .msg-wrap.checked .msg-check::after {
+    content: '';
+    width: 5px;
+    height: 9px;
+    border: 2px solid #000;
+    border-top: none;
+    border-left: none;
+    transform: rotate(40deg) translateY(-1px);
+  }
+
+  /* Delete button per message (hover, non-select mode) — sits next to the bubble */
+  .msg-del-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  /* Incoming: sender line above bubble pads top, so center alignment lands on bubble */
+  .msg-wrap.them .msg-del-btn { align-self: center; }
+  /* Outgoing: no sender line — bubble is at the top, anchor button to top with margin */
+  .msg-wrap.me   .msg-del-btn { align-self: flex-start; margin-top: 12px; }
+  .msg-wrap:hover .msg-del-btn { display: inline-flex; }
+  .select-mode .msg-del-btn { display: none !important; }
+  .msg-del-btn:hover { color: var(--coral); border-color: var(--coral); }
+
+  /* Highlight selected messages */
+  .select-mode .msg-wrap { cursor: pointer; border-radius: 8px; padding: 2px 4px; margin: 0 -4px; }
+  .select-mode .msg-wrap:hover { background: rgba(255,255,255,.03); }
+  .select-mode .msg-wrap.checked { background: rgba(37,211,102,.06); }
+
+  /* Confirm modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    padding: 24px 28px;
+    width: 320px;
+    max-width: 90vw;
+  }
+  .modal h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+    letter-spacing: -0.01em;
+  }
+  .modal p {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+
+  /* ── Login overlay ───────────────────────────────── */
+  .login-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 999;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .login-overlay.open { display: flex; }
+  .login-box {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 16px;
+    padding: 36px 40px;
+    width: 340px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .login-box h2 {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .login-box p {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .login-box input {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    outline: none;
+    transition: border-color .2s;
+  }
+  .login-box input:focus { border-color: var(--accent); }
+  .login-box .login-err {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--coral);
+    display: none;
+  }
+  .login-box .login-err.visible { display: block; }
+  .btn-login {
+    width: 100%;
+    padding: 10px;
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    color: #000;
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-login:hover { background: var(--accent2); }
+
+
+  /* ── User selector & Add user ────────────────────────────────────────── */
+  .user-selector { display:flex; align-items:center; gap:8px; margin-left:auto; }
+  .user-dropdown { position:relative; }
+  .user-btn {
+    display:flex; align-items:center; gap:8px; padding:5px 10px 5px 6px;
+    background:var(--panel); border:1px solid var(--border2); border-radius:8px;
+    cursor:pointer; color:var(--text); font-family:var(--sans); font-size:13px;
+    font-weight:500; transition:border-color .15s; min-width:140px; max-width:200px;
+  }
+  .user-btn:hover { background:var(--surface); }
+  .user-btn-avatar {
+    width:22px; height:22px; border-radius:50%; display:flex; align-items:center;
+    justify-content:center; font-size:10px; font-weight:600; flex-shrink:0;
+  }
+  .user-btn-name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; }
+  .user-status-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; background:var(--muted); }
+  .user-status-dot.online  { background:var(--accent); animation:pulse 2s ease-in-out infinite; }
+  .user-status-dot.qr      { background:var(--amber); }
+  .user-status-dot.offline { background:var(--muted); }
+  .user-caret { font-size:9px; color:var(--muted); flex-shrink:0; }
+  .user-menu {
+    display:none; position:absolute; top:calc(100% + 6px); right:0;
+    background:var(--panel); border:1px solid var(--border2); border-radius:10px;
+    min-width:200px; z-index:50; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.4);
+  }
+  .user-menu.open { display:block; }
+  .user-menu-item {
+    display:flex; align-items:center; gap:10px; padding:10px 14px;
+    cursor:pointer; transition:background .12s;
+  }
+  .user-menu-item:hover { background:var(--surface); }
+  .user-menu-item.active { background:rgba(37,211,102,.08); }
+  .user-menu-name { flex:1; font-size:13px; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .user-menu-phone { font-family:var(--mono); font-size:10px; color:var(--muted); margin-top:1px; }
+  .user-menu-del {
+    background:transparent; border:none; color:var(--muted); cursor:pointer;
+    font-size:13px; padding:2px 4px; border-radius:4px; line-height:1; flex-shrink:0; transition:color .15s;
+  }
+  .user-menu-del:hover { color:var(--coral); }
+  .user-menu-divider { height:1px; background:var(--border); margin:4px 0; }
+  .add-user-row {
+    display:flex; align-items:center; gap:8px; padding:10px 14px;
+    cursor:pointer; color:var(--accent); font-size:13px; font-weight:500; transition:background .12s;
+  }
+  .add-user-row:hover { background:var(--surface); }
+
+  .menu-toggle-row {
+    display:flex; align-items:center; gap:10px; padding:10px 14px;
+    cursor:pointer; font-size:12px; color:var(--text); transition:background .12s;
+  }
+  .menu-toggle-row:hover { background:var(--surface); }
+  .menu-toggle-label { flex:1; }
+  .menu-toggle-sub   { font-family:var(--mono); font-size:10px; color:var(--muted); margin-top:2px; }
+  .toggle-switch {
+    width:32px; height:18px; background:var(--border2); border-radius:10px;
+    position:relative; flex-shrink:0; transition:background .15s;
+  }
+  .toggle-switch::after {
+    content:''; position:absolute; top:2px; left:2px;
+    width:14px; height:14px; border-radius:50%; background:var(--text);
+    transition:left .15s;
+  }
+  .toggle-switch.on { background:var(--accent); }
+  .toggle-switch.on::after { left:16px; background:#000; }
+
+  /* ── QR modal ────────────────────────────────────────────────────────── */
+  .qr-modal-overlay {
+    display:none; position:fixed; inset:0; background:rgba(0,0,0,.75);
+    z-index:300; align-items:center; justify-content:center;
+  }
+  .qr-modal-overlay.open { display:flex; }
+  .qr-modal {
+    background:var(--panel); border:1px solid var(--border2); border-radius:16px;
+    padding:28px; width:340px; max-width:90vw; text-align:center;
+  }
+  .qr-modal h3 { font-size:16px; font-weight:600; letter-spacing:-0.02em; color:var(--text); margin-bottom:6px; }
+  .qr-modal p  { font-family:var(--mono); font-size:11px; color:var(--muted); margin-bottom:20px; line-height:1.6; }
+  .qr-box {
+    width:220px; height:220px; margin:0 auto 20px; border-radius:12px; overflow:hidden;
+    background:#fff; display:flex; align-items:center; justify-content:center;
+  }
+  .qr-box img { width:100%; height:100%; display:block; }
+  .qr-status {
+    font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+    padding:5px 12px; border-radius:20px; display:inline-block; margin-bottom:16px;
+  }
+  .qr-status.waiting  { background:rgba(245,166,35,.15);  color:var(--amber); }
+  .qr-status.scanning { background:rgba(37,211,102,.15);  color:var(--accent); }
+  .qr-status.online   { background:rgba(37,211,102,.15);  color:var(--accent); }
+  .qr-status.offline  { background:rgba(107,114,128,.15); color:var(--muted); }
+  .qr-spinner {
+    width:36px; height:36px; border:3px solid var(--border2);
+    border-top-color:var(--accent); border-radius:50%;
+    animation:spin .7s linear infinite; margin:30px auto;
+  }
+
+  /* ── Toast notifications ─────────────────────────────────────────────── */
+  #toast-container {
+    position:fixed; bottom:24px; right:24px; z-index:500;
+    display:flex; flex-direction:column-reverse; gap:10px; pointer-events:none;
+  }
+  .toast {
+    background:var(--panel); border:1px solid var(--border2); border-radius:12px;
+    padding:12px 16px; max-width:320px; box-shadow:0 8px 24px rgba(0,0,0,.4);
+    animation:toastIn .25s ease; pointer-events:all;
+    display:flex; align-items:flex-start; gap:10px;
+  }
+  .toast-icon { font-size:18px; flex-shrink:0; margin-top:1px; }
+  .toast-body { flex:1; min-width:0; }
+  .toast-title { font-size:12px; font-weight:600; color:var(--text); margin-bottom:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .toast-sub   { font-family:var(--mono); font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .toast-close { background:none; border:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0; flex-shrink:0; line-height:1; }
+  @keyframes toastIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="25px" height="25px" viewBox="0 0 24 24" fill="none">
+        <path d="M8.88595 7.16985C9.06891 7.17475 9.27175 7.18465 9.46474 7.61303C9.59271 7.89821 9.80829 8.42321 9.9839 8.85087C10.1206 9.18366 10.233 9.45751 10.2611 9.51356C10.3254 9.64156 10.365 9.78926 10.2809 9.96156C10.271 9.98188 10.2617 10.0013 10.2526 10.02C10.1852 10.16 10.1372 10.2597 10.0237 10.3899C9.97709 10.4435 9.9285 10.5022 9.88008 10.5607C9.79494 10.6636 9.71035 10.7658 9.63785 10.838C9.50924 10.9659 9.37563 11.1039 9.52402 11.3599C9.6725 11.6159 10.1919 12.4579 10.9587 13.1373C11.783 13.8712 12.4998 14.1805 12.8622 14.3368C12.9325 14.3672 12.9895 14.3918 13.0313 14.4126C13.2886 14.5406 13.4419 14.5209 13.5903 14.3486C13.7388 14.1762 14.2334 13.6001 14.4066 13.3441C14.5748 13.0881 14.7479 13.1275 14.9854 13.2161C15.2228 13.3047 16.4892 13.9251 16.7464 14.0531C16.7972 14.0784 16.8448 14.1012 16.8889 14.1224C17.0678 14.2082 17.1895 14.2665 17.2411 14.3535C17.3054 14.4618 17.3054 14.9739 17.0927 15.5746C16.8751 16.1752 15.8263 16.7513 15.3514 16.7956C15.3064 16.7999 15.2617 16.8053 15.2156 16.8108C14.7804 16.8635 14.228 16.9303 12.2596 16.1555C9.83424 15.2018 8.23322 12.8354 7.90953 12.357C7.88398 12.3192 7.86638 12.2932 7.85698 12.2806L7.8515 12.2733C7.70423 12.0762 6.80328 10.8707 6.80328 9.62685C6.80328 8.43682 7.38951 7.81726 7.65689 7.53467C7.67384 7.51676 7.6895 7.50021 7.70366 7.48494C7.94107 7.22895 8.21814 7.16495 8.39125 7.16495C8.56445 7.16495 8.73756 7.16495 8.88595 7.16985Z" fill="#000000"/>
+        <path fill-rule="evenodd" clip-rule="evenodd" d="M2.18418 21.3314C2.10236 21.6284 2.37285 21.9025 2.6709 21.8247L7.27824 20.6213C8.7326 21.409 10.37 21.8275 12.0371 21.8275H12.0421C17.5281 21.8275 22 17.3815 22 11.9163C22 9.26735 20.966 6.77594 19.0863 4.90491C17.2065 3.03397 14.7084 2 12.042 2C6.55607 2 2.08411 6.44605 2.08411 11.9114C2.08348 13.65 2.5424 15.3582 3.41479 16.8645L2.18418 21.3314ZM4.86092 17.2629C4.96774 16.8752 4.91437 16.4608 4.71281 16.1127C3.97266 14.8348 3.58358 13.3855 3.58411 11.9114C3.58411 7.28158 7.37738 3.5 12.042 3.5C14.3119 3.5 16.4296 4.37698 18.0281 5.96805C19.6248 7.55737 20.5 9.66611 20.5 11.9163C20.5 16.5459 16.7068 20.3275 12.0421 20.3275H12.0371C10.6206 20.3275 9.22863 19.9718 7.99266 19.3023C7.65814 19.1211 7.26726 19.0738 6.89916 19.17L4.13676 19.8915L4.86092 17.2629Z" fill="#000000"/>
+      </svg>
+    </div>
+    WhatsApp Vault
+  </div>
+
+  <div class="search-wrap">
+    <span class="search-icon">⌕</span>
+    <input type="text" id="search-input" placeholder="Search messages..." autocomplete="off" data-1p-ignore data-lpignore="true" oninput="handleSearch(this.value)">
+  </div>
+
+  <div class="dot-live" id="dot-live" title="Bot connection status" style="display:none"></div>
+  <span class="live-label" id="live-label" style="display:none">CONNECTING</span>
+
+  <!-- User selector -->
+  <div class="user-selector">
+    <div class="user-dropdown" id="user-dropdown">
+      <button class="user-btn" id="user-btn" onclick="toggleUserMenu()">
+        <div class="user-btn-avatar" id="user-btn-avatar" style="background:#1a3329;color:#25d366">?</div>
+        <span class="user-btn-name" id="user-btn-name">Select user</span>
+        <div class="user-status-dot offline" id="user-btn-dot"></div>
+        <span class="user-caret">▼</span>
+      </button>
+      <div class="user-menu" id="user-menu">
+        <div id="user-menu-list"><!-- filled by renderUserMenu() --></div>
+        <div class="user-menu-divider"></div>
+        <div class="menu-toggle-row" onclick="event.stopPropagation();toggleFromMeNotifications()">
+          <div style="flex:1">
+            <div class="menu-toggle-label">Notify on outgoing messages</div>
+            <div class="menu-toggle-sub">Toast when any user sends a message</div>
+          </div>
+          <div class="toggle-switch" id="from-me-toggle"></div>
+        </div>
+        <div class="user-menu-divider"></div>
+        <div class="add-user-row" onclick="openAddUser()">
+          <span>＋</span> Add user
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Stats bar -->
+<div class="statsbar">
+  <div class="stat"><div class="stat-num green" id="s-total">—</div><div class="stat-lbl">Total messages</div></div>
+  <div class="stat"><div class="stat-num amber" id="s-voice">—</div><div class="stat-lbl">Voice notes</div></div>
+  <div class="stat"><div class="stat-num blue"  id="s-media">—</div><div class="stat-lbl">Photos & videos</div></div>
+  <div class="stat"><div class="stat-num coral" id="s-chats">—</div><div class="stat-lbl">Chats saved</div></div>
+  <div class="stat"><div class="stat-num"       id="s-today">—</div><div class="stat-lbl">Received today</div></div>
+</div>
+
+<!-- Main layout -->
+<div class="main">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-head">
+      <span>Conversations</span>
+      <span id="chat-count-lbl">0</span>
+    </div>
+    <div class="chat-list" id="chat-list">
+      <div class="empty-list">
+        <div class="spinner"></div>
+        <span>Loading chats...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chat area -->
+  <div class="chat-area">
+
+    <!-- Chat header -->
+    <div class="chat-header" id="chat-header" style="display:none">
+      <div class="avatar" id="chat-avatar">?</div>
+      <div>
+        <div class="name" id="chat-name"></div>
+        <div class="sub" id="chat-sub"></div>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="filter-bar" id="filter-bar" style="display:none">
+      <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('chat',this)">Text</button>
+      <button class="filter-btn" onclick="setFilter('ptt',this)">Voice</button>
+      <button class="filter-btn" onclick="setFilter('image',this)">Photos</button>
+      <button class="filter-btn" onclick="setFilter('video',this)">Video</button>
+      <button class="filter-btn" onclick="setFilter('document',this)">Docs</button>
+      <button class="filter-btn select-toggle" id="select-toggle-btn" onclick="toggleSelectMode()">☑ Select</button>
+    </div>
+
+    <!-- Search results -->
+    <div class="search-results" id="search-results"></div>
+
+    <!-- Action bar (visible in select mode with selections) -->
+    <div class="action-bar" id="action-bar">
+      <span class="sel-count" id="sel-count">0 selected</span>
+      <button class="btn-ghost" onclick="selectAll()">Select all</button>
+      <button class="btn-ghost" onclick="clearSelection()">Clear</button>
+      <button class="btn-danger" onclick="confirmDeleteSelected()">🗑 Delete selected</button>
+    </div>
+
+    <!-- Messages -->
+    <div class="messages" id="messages">
+      <div class="empty">
+        <div class="empty-icon">💬</div>
+        <h3>Select a conversation</h3>
+        <p>Choose a chat from the sidebar to view your backed-up messages, voice notes, and photos.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Confirm modal -->
+<div class="modal-overlay" id="confirm-modal">
+  <div class="modal">
+    <h3 id="modal-title">Confirm delete</h3>
+    <p id="modal-body">This action cannot be undone.</p>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn-danger" id="modal-confirm-btn" onclick="modalConfirm()">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+  <img id="lightbox-img" src="" alt="">
+</div>
+
+<script>
+const API = window.location.origin + '/api'; // dynamic — works on any host
+
+// ── Media blob cache ────────────────────────────────────────────────────
+// <img>, <audio>, <video> src= can't send custom headers, so we fetch media
+// via apiFetch() (which injects the API key) and store blob URLs locally.
+const blobCache = new Map(); // filename → blob URL
+
+async function loadMediaBlob(filename) {
+  if (!filename) return null;
+  if (blobCache.has(filename)) return blobCache.get(filename);
+  try {
+    const r = await apiFetch(`${API}/media/${encodeURIComponent(filename)}`);
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    blobCache.set(filename, url);
+    return url;
+  } catch (e) {
+    console.warn('Media load failed:', filename, e.message);
+    return null;
+  }
+}
+
+// ── Auth ─────────────────────────────────────────────────────────────────────
+// FIX: API key is required. Stored in sessionStorage (cleared when tab closes).
+let apiKey = sessionStorage.getItem('vault_api_key') || '';
+
+async function doLogin() {
+  const input = document.getElementById('login-key-input');
+  const err   = document.getElementById('login-err');
+  const key   = input.value.trim();
+  if (!key) return;
+
+  // Probe /api/stats to validate the key before storing it
+  try {
+    const r = await apiFetch(`${API}/stats`, { headers: { 'X-API-Key': key } });
+    if (r.status === 401) {
+      err.classList.add('visible');
+      input.value = '';
+      return;
+    }
+    apiKey = key;
+    sessionStorage.setItem('vault_api_key', key);
+    document.getElementById('login-overlay').classList.remove('open');
+    err.classList.remove('visible');
+    await loadStats();
+    await loadChats();
+  } catch {
+    err.textContent = 'Could not reach the server.';
+    err.classList.add('visible');
+  }
+}
+
+// Authenticated fetch wrapper — all API calls go through this
+async function apiFetch(url, opts = {}) {
+  const headers = { 'X-API-Key': apiKey, ...(opts.headers || {}) };
+  const r = await fetch(url, { ...opts, headers });
+  if (r.status === 401) {
+    // Key expired or invalid — show login again
+    sessionStorage.removeItem('vault_api_key');
+    apiKey = '';
+    document.getElementById('login-overlay').classList.add('open');
+    throw new Error('Unauthorized');
+  }
+  return r;
+}
+
+let currentChatId = null;
+let currentFilter = 'all';
+let allMessages = [];
+let refreshTimer = null;
+
+// ── Colours for avatars ─────────────────────────────────────────────────
+const AVATAR_COLORS = [
+  ['#1a3329','#25d366'],['#1a2233','#4a9eff'],['#2e1a33','#a855f7'],
+  ['#2e1a1a','#ff6b6b'],['#1a2a1a','#86efac'],['#2a2011','#f5a623'],
+];
+
+function avatarColor(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+function initials(name) {
+  return name.split(/[\s@_-]+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('');
+}
+
+// ── Time formatting ─────────────────────────────────────────────────────
+function fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 86400000 && d.getDate() === now.getDate()) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (diff < 7 * 86400000) {
+    return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()];
+  }
+  return d.toLocaleDateString([], { day:'numeric', month:'short' });
+}
+
+function fmtFull(ts) {
+  return new Date(ts * 1000).toLocaleString([], {
+    day:'numeric', month:'short', year:'numeric',
+    hour:'2-digit', minute:'2-digit'
+  });
+}
+
+// ── Stats ───────────────────────────────────────────────────────────────
+async function loadStats() {
+  // Fetch stats and bot status in parallel
+  try {
+    const statsUrl = currentUserId ? `${API}/stats?userId=${currentUserId}` : `${API}/stats`;
+    const [statsRes, statusRes] = await Promise.all([
+      apiFetch(statsUrl),
+      apiFetch(`${API}/bot-status`),
+    ]);
+    const s  = await statsRes.json();
+    const st = await statusRes.json();
+
+    document.getElementById('s-total').textContent = s.total_messages.toLocaleString();
+    document.getElementById('s-voice').textContent = s.voice_notes.toLocaleString();
+    document.getElementById('s-media').textContent = s.media_files.toLocaleString();
+    document.getElementById('s-chats').textContent = s.total_chats.toLocaleString();
+    document.getElementById('s-today').textContent = s.today_received.toLocaleString();
+
+    const dot   = document.getElementById('dot-live');
+    const label = document.getElementById('live-label');
+    if (st.online) {
+      label.textContent    = 'BOT LIVE';
+      label.style.color    = 'var(--accent)';
+      dot.style.background = 'var(--accent)';
+      dot.style.boxShadow  = '';
+      dot.style.animation  = 'pulse 2s ease-in-out infinite';
+    } else {
+      label.textContent    = 'BOT OFFLINE';
+      label.style.color    = 'var(--coral)';
+      dot.style.background = 'var(--coral)';
+      dot.style.boxShadow  = '0 0 0 3px rgba(255,107,107,.25)';
+      dot.style.animation  = 'none';
+    }
+  } catch {
+    document.getElementById('live-label').textContent = 'OFFLINE';
+    document.getElementById('dot-live').style.background = 'var(--coral)';
+  }
+}
+
+// ── Chat list ───────────────────────────────────────────────────────────
+async function loadChats() {
+  try {
+    if (!currentUserId) { document.getElementById('chat-list').innerHTML = '<div class="empty-list">Select a user above</div>'; return; }
+    const r = await apiFetch(`${API}/chats?userId=${currentUserId}`);
+    const chats = await r.json();
+    const list = document.getElementById('chat-list');
+    document.getElementById('chat-count-lbl').textContent = chats.length;
+
+    if (chats.length === 0) {
+      list.innerHTML = `
+        <div class="empty-list" style="padding:24px;text-align:center">
+          <span style="font-size:24px">📭</span>
+          <span>No messages yet</span>
+          <span style="font-size:10px;opacity:.5">Start chatting on WhatsApp to see messages here</span>
+        </div>`;
+      return;
+    }
+
+    list.innerHTML = chats.map(c => {
+      const [bg, fg] = avatarColor(c.name || c.chat_id);
+      const ini = initials(c.name || c.chat_id.split('@')[0]);
+      const preview = previewText(c.last_type, c.last_body);
+      const time = c.last_msg_at ? fmtTime(c.last_msg_at) : '';
+      const active = c.chat_id === currentChatId ? ' active' : '';
+      const groupTag = c.is_group ? `<span class="tag group">group</span>` : '';
+      return `
+        <div class="chat-item${active}" onclick="selectChat('${escAttr(c.chat_id)}','${escAttr(c.name||c.chat_id)}',${c.is_group},${c.msg_count})">
+          <div class="avatar" style="background:${bg};color:${fg}">${ini}</div>
+          <div class="chat-meta">
+            <div class="chat-name">${esc(c.name || c.chat_id.split('@')[0])} ${groupTag}</div>
+            <div class="chat-preview">${preview}</div>
+          </div>
+          <button class="del-chat-btn" title="Delete conversation" onclick="event.stopPropagation();confirmDeleteChat('${escAttr(c.chat_id)}','${escAttr(c.name||c.chat_id)}')">✕</button>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <div class="chat-time">${time}</div>
+            <div class="chat-count">${c.msg_count}</div>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function previewText(type, body) {
+  if (!type) return '';
+  const icons = { ptt:'🎙 Voice note', audio:'🎵 Audio', image:'🖼 Photo', video:'🎬 Video', document:'📄 Document', sticker:'🎭 Sticker', location:'📍 Location' };
+  if (icons[type]) return icons[type];
+  return body ? esc(body.substring(0, 40)) : '';
+}
+
+// ── Select chat ─────────────────────────────────────────────────────────
+async function selectChat(chatId, name, isGroup, count) {
+  currentChatId = chatId;
+  currentFilter = 'all';
+  msgOffset     = 0;
+  hasMoreMsgs   = false;
+  document.querySelectorAll('.filter-btn').forEach((b,i)=>b.classList.toggle('active',i===0));
+  document.getElementById('chat-header').style.display = 'flex';
+  document.getElementById('filter-bar').style.display = 'flex';
+  document.getElementById('search-results').classList.remove('open');
+
+  const [bg, fg] = avatarColor(name);
+  const av = document.getElementById('chat-avatar');
+  av.textContent = initials(name);
+  av.style.background = bg;
+  av.style.color = fg;
+  document.getElementById('chat-name').textContent = name;
+  document.getElementById('chat-sub').textContent = `${count} messages`;
+
+  document.querySelectorAll('.chat-item').forEach(el => {
+    el.classList.toggle('active', el.querySelector('.chat-name')?.textContent.trim().startsWith(name.trim()));
+  });
+
+  await loadMessages(chatId);
+}
+
+// ── Load messages ───────────────────────────────────────────────────────
+let msgOffset    = 0;
+const MSG_LIMIT  = 100;   // messages loaded per page
+let hasMoreMsgs  = false;
+
+async function loadMessages(chatId, append = false) {
+  const box = document.getElementById('messages');
+  if (!append) {
+    msgOffset = 0;
+    allMessages = [];
+    box.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  }
+  try {
+    const r    = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?userId=${currentUserId}&limit=${MSG_LIMIT}&offset=${msgOffset}`);
+    const page = await r.json();
+    hasMoreMsgs = page.length === MSG_LIMIT;
+    allMessages = append ? [...allMessages, ...page] : page;
+    msgOffset  += page.length;
+    renderMessages();
+    // Scroll to bottom only on first load
+    if (!append) box.scrollTop = box.scrollHeight;
+  } catch {
+    if (!append) box.innerHTML = `<div class="empty"><h3>Failed to load</h3></div>`;
+  }
+}
+
+async function loadMoreMessages() {
+  if (!currentChatId || !hasMoreMsgs) return;
+  const box      = document.getElementById('messages');
+  const prevH    = box.scrollHeight;
+  await loadMessages(currentChatId, true);
+  // Keep scroll position after prepending older messages
+  box.scrollTop = box.scrollHeight - prevH;
+}
+
+function renderMessages() {
+  const box = document.getElementById('messages');
+  let msgs = allMessages;
+  if (currentFilter !== 'all') {
+    msgs = msgs.filter(m => m.type === currentFilter);
+  }
+  if (msgs.length === 0) {
+    box.innerHTML = `<div class="empty"><div class="empty-icon">🔍</div><h3>No messages</h3><p>No ${currentFilter === 'all' ? '' : currentFilter + ' '}messages in this chat.</p></div>`;
+    return;
+  }
+  const loadMoreBtn = hasMoreMsgs
+    ? `<div style="text-align:center;padding:10px 0">
+        <button onclick="loadMoreMessages()" style="font-family:var(--mono);font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--subtle);cursor:pointer">
+          ↑ Load older messages
+        </button>
+       </div>`
+    : '';
+  box.innerHTML = loadMoreBtn + msgs.map(renderMessage).join('');
+}
+
+function renderMessage(m) {
+  const side    = m.from_me ? 'me' : 'them';
+  const checked = selectedIds.has(m.id) ? ' checked' : '';
+  const senderLine = !m.from_me
+    ? `<div class="msg-sender">${esc(m.sender || 'Unknown')}</div>` : '';
+  const timeLine = `<div class="msg-meta">${fmtFull(m.timestamp)}</div>`;
+
+  let content = '';
+  if (m.type === 'ptt' || m.type === 'audio') {
+    content = renderVoice(m);
+  } else if (m.type === 'image' || m.type === 'sticker') {
+    // Stickers are .webp images — render them like photos (just smaller)
+    content = renderImage(m, m.type === 'sticker');
+  } else if (m.type === 'video') {
+    content = renderVideo(m);
+  } else if (m.type === 'document') {
+    content = renderDoc(m);
+  } else if (m.type === 'location') {
+    content = `<div class="bubble">📍 Location (${m.lat?.toFixed(4)}, ${m.lng?.toFixed(4)})</div>`;
+  } else if (m.type === 'vcard') {
+    content = `<div class="bubble">👤 Contact card${m.body ? ': ' + esc(m.body.substring(0, 80)) : ''}</div>`;
+  } else {
+    content = `<div class="bubble">${esc(m.body || '')}</div>`;
+  }
+
+  // Checkbox (visible in select mode) + per-message delete (visible on hover in normal mode)
+  const checkbox = `<div class="msg-check" onclick="event.stopPropagation();toggleMsgSelect(${m.id})"></div>`;
+  const delBtn   = `<button class="msg-del-btn" onclick="event.stopPropagation();confirmDeleteOne(${m.id})">🗑</button>`;
+
+  return `<div class="msg-wrap ${side}${checked}" data-id="${m.id}" onclick="handleMsgClick(${m.id})">
+    ${checkbox}
+    <div class="msg-row ${side}" style="max-width:100%">${senderLine}${content}${timeLine}</div>
+    ${delBtn}
+  </div>`;
+}
+
+function handleMsgClick(id) {
+  if (selectMode) toggleMsgSelect(id);
+}
+
+function renderVoice(m) {
+  const bars = Array.from({length:28}, (_,i) => {
+    const h = 4 + Math.abs(Math.sin(i * 0.7 + (m.id||0)) * 20);
+    return `<div class="wave-bar" style="height:${h.toFixed(0)}px"></div>`;
+  }).join('');
+
+  const id = `voice-${m.id}`;
+  // Pass the filename — toggleVoice will load the blob URL on first play
+  return `
+    <div class="voice-bubble" id="${id}" onclick="toggleVoice('${id}','${esc(m.media_file || '')}')">
+      <button class="play-btn" id="btn-${id}">▶</button>
+      <div class="waveform">${bars}</div>
+      <span class="voice-dur">0:00</span>
+    </div>`;
+}
+
+function renderImage(m, isSticker = false) {
+  if (!m.media_file) return `<div class="bubble">${isSticker ? '🎭 Sticker' : '🖼 Image'} (not downloaded)</div>`;
+  const imgId = `img-${m.id}`;
+  // Render placeholder immediately, then load the authenticated blob async
+  setTimeout(async () => {
+    const el = document.getElementById(imgId);
+    if (!el) return;
+    const url = await loadMediaBlob(m.media_file);
+    if (url) {
+      el.src = url;
+      // Only stickers skip the lightbox click — photos open lightbox
+      if (!isSticker) el.closest('.img-bubble').onclick = () => openLightbox(url);
+    } else {
+      el.parentElement.innerHTML = `<div style="padding:12px;font-size:12px;color:var(--muted)">${isSticker ? '🎭 Sticker' : '🖼 Image'} unavailable</div>`;
+    }
+  }, 0);
+
+  if (isSticker) {
+    // Stickers: smaller, transparent background, no caption
+    return `
+      <div class="img-bubble" style="background:transparent;border:none;max-width:140px">
+        <img id="${imgId}" alt="Sticker" style="min-height:60px;max-height:140px;background:transparent" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+      </div>`;
+  }
+
+  return `
+    <div class="img-bubble">
+      <img id="${imgId}" alt="Photo" style="min-height:80px;background:var(--panel)" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+      <div class="img-meta">📷 ${esc(m.filename || 'Photo')}</div>
+    </div>`;
+}
+
+function renderVideo(m) {
+  if (!m.media_file) return `<div class="bubble">🎬 Video (not downloaded)</div>`;
+  // Use direct URL — videos rely on Range requests for streaming/seeking
+  const directUrl = `${API}/media/${encodeURIComponent(m.media_file)}?key=${encodeURIComponent(apiKey)}`;
+  return `
+    <div class="img-bubble">
+      <video controls preload="metadata" style="width:100%;max-height:200px;display:block" src="${directUrl}"></video>
+      <div class="img-meta">🎬 ${esc(m.filename || 'Video')}</div>
+    </div>`;
+}
+
+function renderDoc(m) {
+  const docId = `doc-${m.id}`;
+  return `
+    <div class="doc-bubble" id="${docId}" onclick="openDoc('${esc(m.media_file || '')}','${esc(m.filename || 'document')}')">
+      <div class="doc-icon">📄</div>
+      <div>
+        <div class="doc-name">${esc(m.filename || m.body || 'Document')}</div>
+        <div class="doc-size">${esc(m.mimetype || '')}</div>
+      </div>
+    </div>`;
+}
+
+async function openDoc(filename, name) {
+  if (!filename) return;
+  const url = await loadMediaBlob(filename);
+  if (!url) return;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+}
+
+// ── Voice playback ──────────────────────────────────────────────────────
+let currentAudio = null;
+let currentAudioId = null;
+
+async function toggleVoice(id, filename) {
+  if (!filename) return;
+
+  // Pause/resume if already loaded
+  if (currentAudioId === id && currentAudio) {
+    currentAudio.paused ? currentAudio.play() : currentAudio.pause();
+    const btn = document.getElementById(`btn-${id}`);
+    if (btn) btn.textContent = currentAudio.paused ? '▶' : '⏸';
+    return;
+  }
+
+  // Stop previous
+  if (currentAudio) {
+    currentAudio.pause();
+    const prevBtn = document.getElementById(`btn-${currentAudioId}`);
+    if (prevBtn) { prevBtn.textContent = '▶'; prevBtn.classList.remove('playing'); }
+    currentAudio = null;
+  }
+
+  const btn = document.getElementById(`btn-${id}`);
+  const dur = document.querySelector(`#${id} .voice-dur`);
+  if (btn) { btn.textContent = '…'; btn.disabled = true; }
+
+  // Use direct authenticated URL — Range requests work natively, no blob needed.
+  // The server accepts ?key= via the same fallback used by SSE.
+  const directUrl = `${API}/media/${encodeURIComponent(filename)}?key=${encodeURIComponent(apiKey)}`;
+  currentAudio   = new Audio(directUrl);
+  currentAudioId = id;
+
+  currentAudio.addEventListener('timeupdate', () => {
+    const t = currentAudio.currentTime;
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60).toString().padStart(2, '0');
+    if (dur) dur.textContent = `${m}:${s}`;
+  });
+
+  currentAudio.addEventListener('ended', () => {
+    if (btn) { btn.textContent = '▶'; btn.classList.remove('playing'); btn.disabled = false; }
+    currentAudio = null; currentAudioId = null;
+  });
+
+  currentAudio.addEventListener('error', () => {
+    console.warn('Audio playback error for', filename, currentAudio.error);
+    if (btn) {
+      btn.textContent = '⬇';
+      btn.title       = 'Click to download (browser cannot play this format)';
+      btn.disabled    = false;
+      btn.onclick     = (e) => {
+        e.stopPropagation();
+        const a = document.createElement('a');
+        a.href = directUrl; a.download = filename; a.click();
+      };
+    }
+    currentAudio = null; currentAudioId = null;
+  });
+
+  try {
+    await currentAudio.play();
+    if (btn) { btn.textContent = '⏸'; btn.classList.add('playing'); btn.disabled = false; }
+  } catch (err) {
+    console.warn('Audio play() rejected:', err.message);
+    if (btn) { btn.textContent = '▶'; btn.disabled = false; }
+  }
+}
+
+// ── Lightbox ────────────────────────────────────────────────────────────
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+  document.getElementById('lightbox-img').src = '';
+}
+
+// ── Filter ──────────────────────────────────────────────────────────────
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderMessages();
+}
+
+// ── Search ──────────────────────────────────────────────────────────────
+let searchTimeout = null;
+
+function handleSearch(q) {
+  clearTimeout(searchTimeout);
+  const panel = document.getElementById('search-results');
+  const msgs  = document.getElementById('messages');
+
+  if (!q.trim() || !currentUserId) {
+    panel.classList.remove('open');
+    msgs.style.display = 'flex';
+    return;
+  }
+
+  msgs.style.display = 'none';
+  panel.classList.add('open');
+  panel.innerHTML = `<div class="empty-list"><div class="spinner"></div><span>Searching...</span></div>`;
+
+  searchTimeout = setTimeout(async () => {
+    try {
+      const r = await apiFetch(`${API}/search?userId=${currentUserId}&q=${encodeURIComponent(q)}`);
+      const results = await r.json();
+      if (results.length === 0) {
+        panel.innerHTML = `<div class="empty-list">No results for "${esc(q)}"</div>`;
+        return;
+      }
+      panel.innerHTML = results.map(m => `
+        <div class="search-result-item" onclick="jumpToChat('${escAttr(m.chat_id)}','${escAttr(m.chat_name||m.chat_id)}')">
+          <div class="sr-chat">${esc(m.chat_name || m.chat_id)}</div>
+          <div class="sr-body">${highlight(esc(m.body||''), q)}</div>
+          <div class="sr-time">${fmtFull(m.timestamp)}</div>
+        </div>`).join('');
+    } catch {
+      panel.innerHTML = `<div class="empty-list">Search failed</div>`;
+    }
+  }, 300);
+}
+
+function highlight(text, q) {
+  return text.replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi'),
+    '<span style="background:#2a3d1a;color:var(--accent)">$1</span>');
+}
+
+async function jumpToChat(chatId, name) {
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-results').classList.remove('open');
+  document.getElementById('messages').style.display = 'flex';
+  await selectChat(chatId, name, false, '?');
+}
+
+// ── Escape helpers ──────────────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function escAttr(s) {
+  return String(s||'').replace(/'/g,"\\'");
+}
+
+
+
+// ── Select / Delete state ───────────────────────────────────────────────
+let selectMode   = false;
+let selectedIds  = new Set();
+let modalAction  = null;   // function to call on modal confirm
+
+// ── Toggle select mode ──────────────────────────────────────────────────
+function toggleSelectMode() {
+  selectMode = !selectMode;
+  selectedIds.clear();
+
+  const btn     = document.getElementById('select-toggle-btn');
+  const msgBox  = document.getElementById('messages');
+  const actionBar = document.getElementById('action-bar');
+
+  btn.classList.toggle('active', selectMode);
+  msgBox.classList.toggle('select-mode', selectMode);
+  actionBar.classList.toggle('visible', selectMode);
+  updateSelCount();
+
+  // Re-render so checkboxes / del buttons appear/disappear
+  renderMessages();
+}
+
+function updateSelCount() {
+  const n = selectedIds.size;
+  document.getElementById('sel-count').textContent =
+    n === 0 ? 'None selected' : n + ' selected';
+}
+
+function selectAll() {
+  const visible = getVisibleMessages();
+  visible.forEach(m => selectedIds.add(m.id));
+  updateSelCount();
+  renderMessages();
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  updateSelCount();
+  renderMessages();
+}
+
+function toggleMsgSelect(id) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  updateSelCount();
+
+  // Flip just this wrapper's checked class without full re-render
+  const wrap = document.querySelector('.msg-wrap[data-id="' + id + '"]');
+  if (wrap) wrap.classList.toggle('checked', selectedIds.has(id));
+}
+
+function getVisibleMessages() {
+  let msgs = allMessages;
+  if (currentFilter !== 'all') msgs = msgs.filter(m => m.type === currentFilter);
+  return msgs;
+}
+
+// ── Delete selected messages ────────────────────────────────────────────
+function confirmDeleteSelected() {
+  const n = selectedIds.size;
+  if (n === 0) return;
+  openModal(
+    'Delete ' + n + ' message' + (n === 1 ? '' : 's') + '?',
+    'This will permanently remove ' + n + ' message' + (n === 1 ? '' : 's') + ' and any attached media files from your vault.',
+    async function() {
+      await apiDeleteMessages(Array.from(selectedIds));
+      selectedIds.clear();
+      if (selectMode) toggleSelectMode();
+      await loadMessages(currentChatId);
+      await loadChats();
+      await loadStats();
+    }
+  );
+}
+
+// ── Delete single message ───────────────────────────────────────────────
+function confirmDeleteOne(id) {
+  openModal(
+    'Delete this message?',
+    'This will permanently remove the message and any attached media file from your vault.',
+    async function() {
+      await apiDeleteMessages([id]);
+      await loadMessages(currentChatId);
+      await loadChats();
+      await loadStats();
+    }
+  );
+}
+
+// ── Delete entire chat ──────────────────────────────────────────────────
+function confirmDeleteChat(chatId, name) {
+  openModal(
+    'Delete "' + name + '"?',
+    'This will permanently delete all messages, voice notes, and photos in this conversation from your vault.',
+    async function() {
+      await apiDeleteChat(chatId);
+      if (currentChatId === chatId) {
+        currentChatId = null;
+        document.getElementById('chat-header').style.display = 'none';
+        document.getElementById('filter-bar').style.display  = 'none';
+        document.getElementById('action-bar').classList.remove('visible');
+        document.getElementById('messages').innerHTML =
+          '<div class="empty"><div class="empty-icon">💬</div><h3>Select a conversation</h3><p>Choose a chat from the sidebar.</p></div>';
+      }
+      await loadChats();
+      await loadStats();
+    }
+  );
+}
+
+// ── Modal helpers ───────────────────────────────────────────────────────
+function openModal(title, body, onConfirm) {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-body').textContent  = body;
+  document.getElementById('confirm-modal').classList.add('open');
+  modalAction = onConfirm;
+}
+
+function closeModal() {
+  document.getElementById('confirm-modal').classList.remove('open');
+  modalAction = null;
+}
+
+async function modalConfirm() {
+  const action = modalAction;  // capture BEFORE closeModal nulls it
+  closeModal();
+  if (action) await action();
+}
+
+// Close modal on overlay click
+document.getElementById('confirm-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// ── API calls ───────────────────────────────────────────────────────────
+async function apiDeleteMessages(ids) {
+  try {
+    const r = await apiFetch(API + '/messages', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: currentUserId, ids }),
+    });
+    return await r.json();
+  } catch (e) {
+    console.error('Delete messages failed:', e);
+  }
+}
+
+async function apiDeleteChat(chatId) {
+  try {
+    // Server requires ?userId= as a query param to scope the delete
+    const url = `${API}/chats/${encodeURIComponent(chatId)}?userId=${currentUserId}`;
+    const r   = await apiFetch(url, { method: 'DELETE' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${r.status}`);
+    }
+    return await r.json();
+  } catch (e) {
+    console.error('Delete chat failed:', e);
+    showToast('❌', 'Delete failed', e.message);
+  }
+}
+
+
+// ── Multi-user state ─────────────────────────────────────────────────────
+let users         = [];          // [{id, name, phone, status}, ...]
+let currentUserId = null;        // selected user's DB id
+let userStatuses  = {};          // userId → 'online'|'qr'|'offline'
+let qrModalUserId    = null;  // which user's QR modal is open
+let qrModalIsNewUser = false; // true if user was just created and has never scanned
+let sseSource     = null;        // EventSource connection
+let userMenuOpen  = false;
+let notifyFromMe  = localStorage.getItem('vault_notify_from_me') === '1';
+
+function toggleFromMeNotifications() {
+  notifyFromMe = !notifyFromMe;
+  localStorage.setItem('vault_notify_from_me', notifyFromMe ? '1' : '0');
+  updateFromMeToggle();
+  showToast(
+    notifyFromMe ? '🔔' : '🔕',
+    notifyFromMe ? 'Outgoing notifications on' : 'Outgoing notifications off',
+    notifyFromMe ? 'Toasts will fire for messages YOU send too' : 'Only incoming messages will toast'
+  );
+}
+
+function updateFromMeToggle() {
+  const el = document.getElementById('from-me-toggle');
+  if (el) el.classList.toggle('on', notifyFromMe);
+}
+
+// ── Avatar helpers ───────────────────────────────────────────────────────
+const UCOLORS = [
+  ['#1a3329','#25d366'],['#1a2233','#4a9eff'],['#2e1a33','#a855f7'],
+  ['#2e1a1a','#ff6b6b'],['#1a2a1a','#86efac'],['#2a2011','#f5a623'],
+];
+function userColor(id) { return UCOLORS[(id - 1) % UCOLORS.length]; }
+function userInitials(name) {
+  return (name || '?').split(/[\s@_-]+/).filter(Boolean).slice(0,2).map(w => w[0].toUpperCase()).join('');
+}
+
+// ── Render user dropdown ─────────────────────────────────────────────────
+function renderUserMenu() {
+  const list = document.getElementById('user-menu-list');
+  if (!list) return;
+  list.innerHTML = users.map(u => {
+    const [bg, fg] = userColor(u.id);
+    const ini      = userInitials(u.name);
+    const st       = userStatuses[u.id] || u.status || 'offline';
+    const active   = u.id === currentUserId ? ' active' : '';
+    return `<div class="user-menu-item${active}" onclick="selectUser(${u.id})">
+      <div class="user-btn-avatar" style="background:${bg};color:${fg}">${ini}</div>
+      <div style="flex:1;min-width:0">
+        <div class="user-menu-name">${esc(u.name)}</div>
+        ${u.phone ? `<div class="user-menu-phone">+${esc(u.phone)}</div>` : ''}
+      </div>
+      <div class="user-status-dot ${st}"></div>
+      <button class="user-menu-del" onclick="event.stopPropagation();confirmRemoveUser(${u.id},'${esc(u.name)}')" title="Remove user">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function updateUserBtn() {
+  const u = users.find(x => x.id === currentUserId);
+  const nameEl  = document.getElementById('user-btn-name');
+  const avEl    = document.getElementById('user-btn-avatar');
+  const dotEl   = document.getElementById('user-btn-dot');
+  if (!nameEl) return;
+  if (!u) {
+    nameEl.textContent   = users.length ? 'Select user' : 'No users yet';
+    avEl.textContent     = '?';
+    avEl.style.background = '#1a3329';
+    avEl.style.color     = '#25d366';
+    dotEl.className      = 'user-status-dot offline';
+    return;
+  }
+  const [bg, fg] = userColor(u.id);
+  const st       = userStatuses[u.id] || u.status || 'offline';
+  nameEl.textContent    = u.name;
+  avEl.textContent      = userInitials(u.name);
+  avEl.style.background = bg;
+  avEl.style.color      = fg;
+  dotEl.className       = `user-status-dot ${st}`;
+}
+
+// ── Toggle dropdown ──────────────────────────────────────────────────────
+function toggleUserMenu() {
+  const menu = document.getElementById('user-menu');
+  userMenuOpen = !userMenuOpen;
+  menu.classList.toggle('open', userMenuOpen);
+  if (userMenuOpen) {
+    renderUserMenu();
+    // If users haven't loaded yet (or load failed), retry immediately so
+    // the dropdown always reflects the current server state when opened.
+    if (users.length === 0) loadUsers();
+  }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+  if (userMenuOpen && !document.getElementById('user-dropdown').contains(e.target)) {
+    document.getElementById('user-menu').classList.remove('open');
+    userMenuOpen = false;
+  }
+});
+
+// ── Select user ──────────────────────────────────────────────────────────
+async function selectUser(userId) {
+  currentUserId = userId;
+  currentChatId = null;
+  currentFilter = 'all';
+  allMessages   = [];
+  document.getElementById('user-menu').classList.remove('open');
+  userMenuOpen = false;
+  updateUserBtn();
+
+  // Reset chat area
+  document.getElementById('chat-header').style.display = 'none';
+  document.getElementById('filter-bar').style.display  = 'none';
+  document.getElementById('action-bar').classList.remove('visible');
+  document.getElementById('messages').innerHTML =
+    '<div class="empty"><div class="empty-icon">💬</div><h3>Select a conversation</h3><p>Choose a chat from the sidebar.</p></div>';
+
+  await loadStats();
+  await loadChats();
+}
+
+// ── Load users ───────────────────────────────────────────────────────────
+async function loadUsers() {
+  try {
+    const r = await apiFetch(`${API}/users`);
+    users   = await r.json();
+    // Sync statuses from server response
+    users.forEach(u => { userStatuses[u.id] = u.status || 'offline'; });
+    renderUserMenu();
+    updateUserBtn();
+
+    // Auto-select first user if none selected
+    if (!currentUserId && users.length > 0) {
+      await selectUser(users[0].id);
+    }
+  } catch(e) {
+    console.error('loadUsers:', e);
+  }
+}
+
+// ── Add user flow ────────────────────────────────────────────────────────
+async function openAddUser() {
+  document.getElementById('user-menu').classList.remove('open');
+  userMenuOpen = false;
+
+  const name = prompt('Enter a name for this WhatsApp account (e.g. "Reda" or "Sara"):');
+  if (!name || !name.trim()) return;
+
+  // Create user on server — this immediately starts the WhatsApp session
+  let user;
+  try {
+    const r = await apiFetch(`${API}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    user = await r.json();
+  } catch (e) {
+    showToast('❌', 'Failed to add user', e.message);
+    return;
+  }
+
+  users.push(user);
+  qrModalUserId    = user.id;
+  qrModalIsNewUser = true;  // brand-new — cancel should remove them
+  openQRModal(user);
+}
+
+// ── Remove user ──────────────────────────────────────────────────────────
+function confirmRemoveUser(userId, name) {
+  openModal(
+    `Remove "${name}"?`,
+    `This will permanently delete all messages and media for this account from the vault.`,
+    async () => {
+      await apiFetch(`${API}/users/${userId}`, { method: 'DELETE' });
+      users = users.filter(u => u.id !== userId);
+      delete userStatuses[userId];
+      if (currentUserId === userId) {
+        currentUserId = null;
+        currentChatId = null;
+        if (users.length > 0) await selectUser(users[0].id);
+        else {
+          document.getElementById('chat-list').innerHTML = '<div class="empty-list">No users yet</div>';
+          document.getElementById('messages').innerHTML  = '<div class="empty"><div class="empty-icon">👤</div><h3>No users</h3><p>Add a user to get started.</p></div>';
+        }
+      }
+      renderUserMenu();
+      updateUserBtn();
+    }
+  );
+}
+
+// ── QR modal ─────────────────────────────────────────────────────────────
+function openQRModal(user) {
+  qrModalUserId = user.id;
+  document.getElementById('qr-modal-title').textContent = `Linking ${user.name}`;
+  document.getElementById('qr-modal-sub').textContent   = 'Open WhatsApp → Linked Devices → Link a Device and scan the QR code.';
+  document.getElementById('qr-box').innerHTML           = '<div class="qr-spinner"></div>';
+  document.getElementById('qr-status-badge').textContent = 'Starting session...';
+  document.getElementById('qr-status-badge').className   = 'qr-status waiting';
+  document.getElementById('qr-modal-overlay').classList.add('open');
+  // Poll for QR in case SSE delivers it before we open the modal
+  pollQR(user.id);
+}
+
+async function closeQRModal() {
+  document.getElementById('qr-modal-overlay').classList.remove('open');
+  const cancelId  = qrModalUserId;
+  const isNew     = qrModalIsNewUser;
+  qrModalUserId    = null;
+  qrModalIsNewUser = false;
+
+  // If this was a brand-new user who never scanned, tell the server to
+  // stop Chrome and remove them — otherwise QR codes keep generating forever.
+  if (cancelId && isNew) {
+    try {
+      const r = await apiFetch(`${API}/users/${cancelId}/cancel`, { method: 'POST' });
+      const d = await r.json();
+      if (d.removed) {
+        // Remove from local users list so they don't appear in the selector
+        users = users.filter(u => u.id !== cancelId);
+        renderUserSelector();
+      }
+    } catch (_) {}
+  }
+}
+
+async function pollQR(userId) {
+  // Poll every 2s for up to 2 minutes — Chrome takes 20-30s to launch on
+  // a 1GB VM, and we want to keep refreshing the QR if it regenerates.
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    if (qrModalUserId !== userId) return; // modal was closed
+    try {
+      const r = await apiFetch(`${API}/users/${userId}/qr`);
+      const d = await r.json();
+      if (d.status === 'online') {
+        document.getElementById('qr-status-badge').textContent = '✅ Connected!';
+        document.getElementById('qr-status-badge').className   = 'qr-status online';
+        setTimeout(closeQRModal, 1500);
+        return;
+      }
+      if (d.qr) renderQRInModal(d.qr);   // keep refreshing — don't return
+    } catch (_) {}
+  }
+  // After 2 min with no QR, show a helpful message
+  if (qrModalUserId === userId) {
+    document.getElementById('qr-status-badge').textContent = '⚠️ Taking too long — check server logs';
+    document.getElementById('qr-status-badge').className   = 'qr-status offline';
+  }
+}
+
+function renderQRInModal(qrDataUrl) {
+  const box = document.getElementById('qr-box');
+  if (!box) return;
+  box.innerHTML = `<img src="${qrDataUrl}" alt="QR code">`;
+  document.getElementById('qr-status-badge').textContent = 'Waiting for scan...';
+  document.getElementById('qr-status-badge').className   = 'qr-status waiting';
+}
+
+// ── SSE — real-time events ────────────────────────────────────────────────
+function connectSSE() {
+  if (sseSource) sseSource.close();
+  // Include API key in URL since EventSource can't send custom headers
+  sseSource = new EventSource(`${API}/events?key=${encodeURIComponent(apiKey)}`);
+
+  sseSource.addEventListener('qr', e => {
+    const { userId, qr } = JSON.parse(e.data);
+    userStatuses[userId] = 'qr';
+    renderUserMenu(); updateUserBtn();
+    if (qrModalUserId === userId) renderQRInModal(qr);
+  });
+
+  sseSource.addEventListener('ready', e => {
+    const { userId, name } = JSON.parse(e.data);
+    userStatuses[userId] = 'online';
+    // Update name in local users array (WhatsApp may have returned real name)
+    const u = users.find(x => x.id === userId);
+    if (u) u.name = name;
+    renderUserMenu(); updateUserBtn();
+    // Close QR modal if this is the user being linked
+    if (qrModalUserId === userId) {
+      document.getElementById('qr-status-badge').textContent = '✅ Connected!';
+      document.getElementById('qr-status-badge').className   = 'qr-status online';
+      setTimeout(closeQRModal, 1500);
+    }
+    // Reload users to get updated phone number
+    loadUsers();
+  });
+
+  sseSource.addEventListener('status', e => {
+    const { userId, status } = JSON.parse(e.data);
+    userStatuses[userId] = status;
+    renderUserMenu(); updateUserBtn();
+  });
+
+  sseSource.addEventListener('message', e => {
+    const { userId, userName, chatName, sender, body, type, fromMe } = JSON.parse(e.data);
+    if (fromMe && !notifyFromMe) return; // don't toast your own messages
+
+    const ICONS = { chat:'💬', ptt:'🎙️', audio:'🎵', image:'🖼️', video:'🎬', document:'📄', sticker:'🎭', location:'📍' };
+    const icon  = ICONS[type] || '📨';
+    const title = `${userName} ← ${sender}`;
+    const sub   = type === 'chat' ? (body || '').substring(0, 60)
+                : type === 'ptt'  ? 'Voice message'
+                : type === 'image'? 'Photo'
+                : type === 'video'? 'Video'
+                : type === 'sticker' ? 'Sticker'
+                : type === 'audio'? 'Audio'
+                : type === 'document' ? 'Document'
+                : type;
+
+    showToast(icon, title, sub);
+
+    // Refresh chat list if this message belongs to the active user
+    if (userId === currentUserId) {
+      loadChats();
+      if (currentChatId) loadMessages(currentChatId, false);
+    }
+  });
+
+  sseSource.onerror = () => {
+    // Reconnect after 5s on error
+    setTimeout(connectSSE, 5000);
+  };
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+function showToast(icon, title, sub) {
+  const container = document.getElementById('toast-container');
+  const id        = 'toast-' + Date.now();
+  const el        = document.createElement('div');
+  el.className    = 'toast';
+  el.id           = id;
+  el.innerHTML    = `
+    <div class="toast-icon">${icon}</div>
+    <div class="toast-body">
+      <div class="toast-title">${esc(title)}</div>
+      <div class="toast-sub">${esc(sub)}</div>
+    </div>
+    <button class="toast-close" onclick="document.getElementById('${id}').remove()">✕</button>`;
+  container.appendChild(el);
+  // Auto-dismiss after 5s
+  setTimeout(() => { try { el.remove(); } catch(_) {} }, 5000);
+}
+
+// ── Auto-refresh ────────────────────────────────────────────────────────
+async function refresh() {
+  await loadUsers();
+  await loadStats();
+  await loadChats();
+  if (currentChatId) await loadMessages(currentChatId, false);
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
+(async () => {
+  if (apiKey) {
+    // Returning visitor with a cached key — validate it first
+    try {
+      const r = await fetch(`${API}/stats`, { headers: { 'X-API-Key': apiKey } });
+      if (r.status === 401) {
+        sessionStorage.removeItem('vault_api_key');
+        apiKey = '';
+        document.getElementById('login-overlay').classList.add('open');
+        return;
+      }
+      document.getElementById('login-overlay').classList.remove('open');
+      updateFromMeToggle();
+      connectSSE();
+      await loadUsers();
+      refreshTimer = setInterval(async () => {
+        await loadStats();
+        await loadChats();
+        if (currentChatId) await loadMessages(currentChatId, false);
+      }, 10000);
+    } catch {
+      document.getElementById('login-overlay').classList.add('open');
+    }
+  }
+  // else: login overlay is already open (default)
+})();
+</script>
+
+<!-- Login overlay -->
+<div class="login-overlay open" id="login-overlay">
+  <div class="login-box">
+    <h2>
+      <div class="logo-icon">
+        <svg width="26px" height="26px" viewBox="0 0 24 24" fill="none">
+          <path d="M8.88595 7.16985C9.06891 7.17475 9.27175 7.18465 9.46474 7.61303C9.59271 7.89821 9.80829 8.42321 9.9839 8.85087C10.1206 9.18366 10.233 9.45751 10.2611 9.51356C10.3254 9.64156 10.365 9.78926 10.2809 9.96156C10.271 9.98188 10.2617 10.0013 10.2526 10.02C10.1852 10.16 10.1372 10.2597 10.0237 10.3899C9.97709 10.4435 9.9285 10.5022 9.88008 10.5607C9.79494 10.6636 9.71035 10.7658 9.63785 10.838C9.50924 10.9659 9.37563 11.1039 9.52402 11.3599C9.6725 11.6159 10.1919 12.4579 10.9587 13.1373C11.783 13.8712 12.4998 14.1805 12.8622 14.3368C12.9325 14.3672 12.9895 14.3918 13.0313 14.4126C13.2886 14.5406 13.4419 14.5209 13.5903 14.3486C13.7388 14.1762 14.2334 13.6001 14.4066 13.3441C14.5748 13.0881 14.7479 13.1275 14.9854 13.2161C15.2228 13.3047 16.4892 13.9251 16.7464 14.0531C16.7972 14.0784 16.8448 14.1012 16.8889 14.1224C17.0678 14.2082 17.1895 14.2665 17.2411 14.3535C17.3054 14.4618 17.3054 14.9739 17.0927 15.5746C16.8751 16.1752 15.8263 16.7513 15.3514 16.7956C15.3064 16.7999 15.2617 16.8053 15.2156 16.8108C14.7804 16.8635 14.228 16.9303 12.2596 16.1555C9.83424 15.2018 8.23322 12.8354 7.90953 12.357C7.88398 12.3192 7.86638 12.2932 7.85698 12.2806L7.8515 12.2733C7.70423 12.0762 6.80328 10.8707 6.80328 9.62685C6.80328 8.43682 7.38951 7.81726 7.65689 7.53467C7.67384 7.51676 7.6895 7.50021 7.70366 7.48494C7.94107 7.22895 8.21814 7.16495 8.39125 7.16495C8.56445 7.16495 8.73756 7.16495 8.88595 7.16985Z" fill="#000000"/>
+          <path fill-rule="evenodd" clip-rule="evenodd" d="M2.18418 21.3314C2.10236 21.6284 2.37285 21.9025 2.6709 21.8247L7.27824 20.6213C8.7326 21.409 10.37 21.8275 12.0371 21.8275H12.0421C17.5281 21.8275 22 17.3815 22 11.9163C22 9.26735 20.966 6.77594 19.0863 4.90491C17.2065 3.03397 14.7084 2 12.042 2C6.55607 2 2.08411 6.44605 2.08411 11.9114C2.08348 13.65 2.5424 15.3582 3.41479 16.8645L2.18418 21.3314ZM4.86092 17.2629C4.96774 16.8752 4.91437 16.4608 4.71281 16.1127C3.97266 14.8348 3.58358 13.3855 3.58411 11.9114C3.58411 7.28158 7.37738 3.5 12.042 3.5C14.3119 3.5 16.4296 4.37698 18.0281 5.96805C19.6248 7.55737 20.5 9.66611 20.5 11.9163C20.5 16.5459 16.7068 20.3275 12.0421 20.3275H12.0371C10.6206 20.3275 9.22863 19.9718 7.99266 19.3023C7.65814 19.1211 7.26726 19.0738 6.89916 19.17L4.13676 19.8915L4.86092 17.2629Z" fill="#000000"/>
+        </svg>
+      </div>
+      WhatsApp Vault
+    </h2>
+    <p>Enter your DASHBOARD_API_KEY to access the vault.</p>
+    <input type="password" id="login-key-input" placeholder="API key..." autocomplete="new-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <div class="login-err" id="login-err">Incorrect key — try again.</div>
+    <button class="btn-login" onclick="doLogin()">Unlock</button>
+  </div>
+</div>
+
+<!-- QR modal -->
+<div class="qr-modal-overlay" id="qr-modal-overlay">
+  <div class="qr-modal">
+    <h3 id="qr-modal-title">Add user</h3>
+    <p id="qr-modal-sub">Open WhatsApp → Linked Devices → Link a Device and scan the QR code.</p>
+    <div class="qr-box" id="qr-box">
+      <div class="qr-spinner" id="qr-spinner"></div>
+    </div>
+    <div class="qr-status waiting" id="qr-status-badge">Waiting for QR...</div>
+    <button class="btn-ghost" onclick="closeQRModal()" style="width:100%">Cancel</button>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+</body>
+</html>
