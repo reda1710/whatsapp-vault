@@ -90,7 +90,7 @@ class Session extends EventEmitter {
         handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
         args: [
           '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
+          '--disable-accelerated-2d-canvas', '--no-first-run',
           '--disable-gpu', '--disable-extensions', '--disable-background-networking',
           '--disable-default-apps', '--disable-sync', '--metrics-recording-only',
           '--mute-audio', '--no-default-browser-check', '--safebrowsing-disable-auto-update',
@@ -414,7 +414,7 @@ class SessionManager extends EventEmitter {
     const users = db.getAllUsers();
     for (const user of users) {
       await this.startSession(user.id, user.name);
-      await sleep(3000); // stagger startups to avoid RAM spike
+      await sleep(30000); // stagger startups to avoid RAM spike
     }
     if (users.length === 0) {
       console.log('ℹ️  No users yet — add one from the dashboard\n');

@@ -7,3 +7,4 @@ vault.db-shm
 media/
 *.log
 .env
+.claude/settings.local.json
