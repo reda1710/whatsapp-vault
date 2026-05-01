@@ -62,11 +62,12 @@ class Session extends EventEmitter {
     this.client        = null;
     this.qrTimer       = null;
     this.readyTimer    = null;
-    this.booting       = false;
-    this.stopping      = false;
-    this.authenticated = false;
-    this.status        = 'offline'; // 'offline' | 'qr' | 'online'
-    this.qrData        = null;      // latest QR as base64 PNG data URL
+    this.booting          = false;
+    this.stopping         = false;
+    this.authenticated    = false;
+    this.status           = 'offline'; // 'offline' | 'qr' | 'online'
+    this.qrData           = null;      // latest QR as base64 PNG data URL
+    this._preEventCrashes = 0;         // consecutive crashes before any qr/auth event
     this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
     this.processingLateMedia  = false;
   }
@@ -105,6 +106,7 @@ class Session extends EventEmitter {
 
     client.on('qr', async qr => {
       if (!isActive() || this.status === 'online') return;
+      this._preEventCrashes = 0;
       clearTimeout(this.qrTimer);
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
@@ -139,6 +141,7 @@ class Session extends EventEmitter {
 
     client.on('authenticated', () => {
       if (!isActive()) return;
+      this._preEventCrashes = 0;
 
       // WhatsApp fires 'authenticated' multiple times in rapid succession
       // (often 5+ times within a second) — the flag below ensures we only
@@ -216,6 +219,18 @@ class Session extends EventEmitter {
       await client.initialize();
     } catch (err) {
       if (isHarmless(err.message)) {
+        const noEventFired = !this.authenticated && !this._qrPrinted;
+        if (noEventFired) {
+          this._preEventCrashes++;
+          if (this._preEventCrashes >= 2) {
+            console.warn(`⚠️  [${this.userName}] Chrome crashed ${this._preEventCrashes}x before any event — wiping corrupted profile\n`);
+            this._preEventCrashes = 0;
+            try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); }
+            catch (e) { console.warn(`⚠️  Failed to wipe profile for ${this.userId}:`, e.message); }
+          }
+        } else {
+          this._preEventCrashes = 0;
+        }
         console.warn(`⚠️  [${this.userName}] Transient init error — recovering\n`);
         await this._destroy();
         await sleep(RECONNECT_DELAY);
