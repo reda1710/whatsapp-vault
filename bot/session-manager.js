@@ -11,7 +11,7 @@ const db                   = require('./database');
 
 const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
-const READY_TIMEOUT = 40 * 1000;
+const READY_TIMEOUT = 90 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
 
 const CHROME_BIN =
@@ -94,7 +94,7 @@ class Session extends EventEmitter {
           '--disable-gpu', '--disable-extensions', '--disable-background-networking',
           '--disable-default-apps', '--disable-sync', '--metrics-recording-only',
           '--mute-audio', '--no-default-browser-check', '--safebrowsing-disable-auto-update',
-          '--js-flags=--max-old-space-size=200', '--memory-pressure-off',
+          '--js-flags=--max-old-space-size=512', '--memory-pressure-off',
           '--disable-features=TranslateUI,BlinkGenPropertyTrees',
         ],
       },
@@ -216,7 +216,10 @@ class Session extends EventEmitter {
       await client.initialize();
     } catch (err) {
       if (isHarmless(err.message)) {
-        console.warn(`⚠️  [${this.userName}] Transient init error\n`);
+        console.warn(`⚠️  [${this.userName}] Transient init error — recovering\n`);
+        await this._destroy();
+        await sleep(RECONNECT_DELAY);
+        setTimeout(() => this.start(), 0);
         return;
       }
       const isOOM = err.message.includes('Failed to launch the browser process');
