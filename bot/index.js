@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { SessionManager } = require('./session-manager');
 const db = require('./database');
 
@@ -33,8 +34,26 @@ module.exports = { manager };
 // Boot the dashboard server in the same process
 require('../dashboard/server');
 
+function logRam() {
+  const nodeMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+
+  let chromeMB = 0;
+  try {
+    const pids = spawnSync('pgrep', ['-f', 'google-chrome|chromium'], { encoding: 'utf8' })
+      .stdout.trim().split('\n').filter(Boolean);
+    if (pids.length) {
+      const out = spawnSync('ps', ['-o', 'rss=', '-p', pids.join(',')], { encoding: 'utf8' }).stdout;
+      chromeMB = Math.round(out.trim().split('\n').reduce((s, v) => s + (parseInt(v) || 0), 0) / 1024);
+    }
+  } catch (_) {}
+
+  const totalMB = nodeMB + chromeMB;
+  console.log(`🧠 RAM — node: ${nodeMB} MB  chrome: ${chromeMB} MB  total: ${totalMB} MB\n`);
+}
+
 // Start all existing sessions (after the dashboard is listening)
 manager.startAll().catch(e => console.error('Startup error:', e));
+const ramInterval = setInterval(logRam, 30_000);
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 let stopping = false;
@@ -42,6 +61,7 @@ async function shutdown(sig) {
   if (stopping) return;
   stopping = true;
   console.log(`\n👋 ${sig} — shutting down...`);
+  clearInterval(ramInterval);
   db.setBotOffline();
   await manager.stopAll();
   console.log('✅ Done.\n');
