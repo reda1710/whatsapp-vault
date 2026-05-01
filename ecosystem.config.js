@@ -31,7 +31,6 @@ module.exports = {
       cwd:                       __dirname,
       env:                       env,
       max_memory_restart:        '900M',
-      kill_timeout:              20000,
       restart_delay:             5000,
       exp_backoff_restart_delay: 100,
       log_date_format:           'YYYY-MM-DD HH:mm:ss',

@@ -11,7 +11,7 @@ const db                   = require('./database');
 
 const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
-const READY_TIMEOUT = 90 * 1000;
+const READY_TIMEOUT = 40 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
 
 const CHROME_BIN =
@@ -62,12 +62,11 @@ class Session extends EventEmitter {
     this.client        = null;
     this.qrTimer       = null;
     this.readyTimer    = null;
-    this.booting          = false;
-    this.stopping         = false;
-    this.authenticated    = false;
-    this.status           = 'offline'; // 'offline' | 'qr' | 'online'
-    this.qrData           = null;      // latest QR as base64 PNG data URL
-    this._preEventCrashes = 0;         // consecutive crashes before any qr/auth event
+    this.booting       = false;
+    this.stopping      = false;
+    this.authenticated = false;
+    this.status        = 'offline'; // 'offline' | 'qr' | 'online'
+    this.qrData        = null;      // latest QR as base64 PNG data URL
     this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
     this.processingLateMedia  = false;
   }
@@ -91,11 +90,11 @@ class Session extends EventEmitter {
         handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
         args: [
           '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas', '--no-first-run',
+          '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
           '--disable-gpu', '--disable-extensions', '--disable-background-networking',
           '--disable-default-apps', '--disable-sync', '--metrics-recording-only',
           '--mute-audio', '--no-default-browser-check', '--safebrowsing-disable-auto-update',
-          '--js-flags=--max-old-space-size=512', '--memory-pressure-off',
+          '--js-flags=--max-old-space-size=200', '--memory-pressure-off',
           '--disable-features=TranslateUI,BlinkGenPropertyTrees',
         ],
       },
@@ -106,7 +105,6 @@ class Session extends EventEmitter {
 
     client.on('qr', async qr => {
       if (!isActive() || this.status === 'online') return;
-      this._preEventCrashes = 0;
       clearTimeout(this.qrTimer);
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
@@ -141,7 +139,6 @@ class Session extends EventEmitter {
 
     client.on('authenticated', () => {
       if (!isActive()) return;
-      this._preEventCrashes = 0;
 
       // WhatsApp fires 'authenticated' multiple times in rapid succession
       // (often 5+ times within a second) — the flag below ensures we only
@@ -219,22 +216,7 @@ class Session extends EventEmitter {
       await client.initialize();
     } catch (err) {
       if (isHarmless(err.message)) {
-        const noEventFired = !this.authenticated && !this._qrPrinted;
-        if (noEventFired) {
-          this._preEventCrashes++;
-          if (this._preEventCrashes >= 2) {
-            console.warn(`⚠️  [${this.userName}] Chrome crashed ${this._preEventCrashes}x before any event — wiping corrupted profile\n`);
-            this._preEventCrashes = 0;
-            try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); }
-            catch (e) { console.warn(`⚠️  Failed to wipe profile for ${this.userId}:`, e.message); }
-          }
-        } else {
-          this._preEventCrashes = 0;
-        }
-        console.warn(`⚠️  [${this.userName}] Transient init error — recovering\n`);
-        await this._destroy();
-        await sleep(RECONNECT_DELAY);
-        setTimeout(() => this.start(), 0);
+        console.warn(`⚠️  [${this.userName}] Transient init error\n`);
         return;
       }
       const isOOM = err.message.includes('Failed to launch the browser process');
@@ -429,7 +411,7 @@ class SessionManager extends EventEmitter {
     const users = db.getAllUsers();
     for (const user of users) {
       await this.startSession(user.id, user.name);
-      await sleep(30000); // stagger startups to avoid RAM spike
+      await sleep(3000); // stagger startups to avoid RAM spike
     }
     if (users.length === 0) {
       console.log('ℹ️  No users yet — add one from the dashboard\n');
