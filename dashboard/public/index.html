@@ -1693,7 +1693,6 @@ async function toggleVoice(id, filename) {
   }
 
   const btn = document.getElementById(`btn-${id}`);
-  const dur = document.querySelector(`#${id} .voice-dur`);
   if (btn) { btn.textContent = '…'; btn.disabled = true; }
 
   // Use direct authenticated URL — Range requests work natively, no blob needed.
@@ -1706,7 +1705,11 @@ async function toggleVoice(id, filename) {
     const t = currentAudio.currentTime;
     const m = Math.floor(t / 60);
     const s = Math.floor(t % 60).toString().padStart(2, '0');
-    if (dur) dur.textContent = `${m}:${s}`;
+    // Requery on each tick — a background chat reload between play sessions
+    // would have replaced the .voice-dur span, leaving any captured reference
+    // detached. The closure-scoped `id` is stable, so this lookup is cheap.
+    const liveDur = document.querySelector(`#${id} .voice-dur`);
+    if (liveDur) liveDur.textContent = `${m}:${s}`;
   });
 
   currentAudio.addEventListener('ended', () => {
