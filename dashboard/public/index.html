@@ -2131,13 +2131,17 @@ function openQRModal(user) {
   pollQR(user.id);
 }
 
-async function closeQRModal() {
+// reason: 'cancel' = user dismissed the modal (X / overlay click) → destroy Chrome
+//         'auto'   = system closed it (scan succeeded or QR_TIMEOUT)         → leave the
+//                    server-side state alone; /cancel and /disconnect would otherwise
+//                    tear down a session that just went online or was already destroyed.
+async function closeQRModal(reason = 'cancel') {
   document.getElementById('qr-modal-overlay').classList.remove('open');
   const cancelId  = qrModalUserId;
   const isNew     = qrModalIsNewUser;
   qrModalUserId    = null;
   qrModalIsNewUser = false;
-  if (!cancelId) return;
+  if (!cancelId || reason === 'auto') return;
 
   if (isNew) {
     // Brand-new user who never scanned — stop Chrome and remove them.
@@ -2189,7 +2193,7 @@ async function pollQR(userId) {
       if (d.status === 'online') {
         document.getElementById('qr-status-badge').textContent = '✅ Connected!';
         document.getElementById('qr-status-badge').className   = 'qr-status online';
-        setTimeout(closeQRModal, 1500);
+        setTimeout(() => closeQRModal('auto'), 1500);
         return;
       }
       if (d.qr) renderQRInModal(d.qr);   // keep refreshing — don't return
@@ -2234,7 +2238,7 @@ function connectSSE() {
     if (qrModalUserId === userId) {
       document.getElementById('qr-status-badge').textContent = '✅ Connected!';
       document.getElementById('qr-status-badge').className   = 'qr-status online';
-      setTimeout(closeQRModal, 1500);
+      setTimeout(() => closeQRModal('auto'), 1500);
     }
     // Reload users to get updated phone number
     loadUsers();
@@ -2255,10 +2259,9 @@ function connectSSE() {
 
   sseSource.addEventListener('qr_timeout', e => {
     const { userId } = JSON.parse(e.data);
-    // Auto-close the modal if it's open for this user — Chrome was just destroyed.
-    // For brand-new users, the existing /cancel flow inside closeQRModal removes them;
-    // for existing users, /disconnect is a no-op since Chrome is already gone.
-    if (qrModalUserId === userId) closeQRModal();
+    // Auto-close the modal — Chrome was already destroyed by QR_TIMEOUT.
+    // 'auto' so we don't fire a second /disconnect that would do nothing.
+    if (qrModalUserId === userId) closeQRModal('auto');
   });
 
   sseSource.addEventListener('message', e => {
