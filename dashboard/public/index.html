@@ -2265,7 +2265,7 @@ function connectSSE() {
     if (qrModalUserId === userId) closeQRModal('auto');
   });
 
-  sseSource.addEventListener('message', e => {
+  sseSource.addEventListener('message', async e => {
     const { userId, userName, chatName, sender, body, type, fromMe } = JSON.parse(e.data);
     if (fromMe && !notifyFromMe) return; // don't toast your own messages
 
@@ -2286,7 +2286,15 @@ function connectSSE() {
     // Refresh chat list if this message belongs to the active user
     if (userId === currentUserId) {
       loadChats();
-      if (currentChatId) loadMessages(currentChatId, false);
+      if (currentChatId) {
+        // loadMessages wipes box.innerHTML and resets scrollTop to 0. Capture
+        // distance-from-bottom now and restore it after the re-render so the
+        // user stays parked on whatever they were reading.
+        const box = document.getElementById('messages');
+        const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+        await loadMessages(currentChatId, false);
+        box.scrollTop = box.scrollHeight - box.clientHeight - distFromBottom;
+      }
     }
   });
 
