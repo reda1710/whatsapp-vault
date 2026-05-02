@@ -5,7 +5,7 @@ const qrcode               = require('qrcode-terminal');
 const qrcodeLib            = require('qrcode');
 const path                 = require('path');
 const fs                   = require('fs');
-const { execSync }         = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const { EventEmitter }     = require('events');
 const db                   = require('./database');
 
@@ -28,8 +28,12 @@ const isHarmless = m => HARMLESS.some(s => m.includes(s));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function killChrome(userId) {
-  try { execSync(`pkill -9 -f "user-data-dir.*session-${userId}" 2>/dev/null; true`, { shell: true }); } 
-  catch (err) { console.warn(`⚠️  Failed to kill Chrome for user ${userId}:`, err.message); }
+  // No shell wrapper: pkill is the only process containing the pattern, and
+  // pkill excludes its own PID — so it can't self-match and kill its parent.
+  // Exit codes: 0 = killed something, 1 = no match (both fine).
+  const r = spawnSync('pkill', ['-9', '-f', `user-data-dir.*session-${userId}`], { stdio: 'ignore' });
+  if (r.error) console.warn(`⚠️  pkill not available for user ${userId}: ${r.error.message}`);
+  else if (r.status !== null && r.status > 1) console.warn(`⚠️  pkill exited ${r.status} for user ${userId}`);
 }
 
 function clearLock(userId) {
@@ -94,7 +98,7 @@ class Session extends EventEmitter {
           '--disable-gpu', '--disable-extensions', '--disable-background-networking',
           '--disable-default-apps', '--disable-sync', '--metrics-recording-only',
           '--mute-audio', '--no-default-browser-check', '--safebrowsing-disable-auto-update',
-          '--js-flags=--max-old-space-size=200', '--memory-pressure-off',
+          '--js-flags=--max-old-space-size=500', '--memory-pressure-off',
           '--disable-features=TranslateUI,BlinkGenPropertyTrees',
         ],
       },

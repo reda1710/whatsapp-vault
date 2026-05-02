@@ -33,6 +33,7 @@ module.exports = {
       max_memory_restart:        '800M',
       restart_delay:             5000,
       exp_backoff_restart_delay: 100,
+      kill_timeout:              20000,
       log_date_format:           'YYYY-MM-DD HH:mm:ss',
     },
   ],
