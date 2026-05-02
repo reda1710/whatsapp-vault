@@ -38,13 +38,15 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 - 🔗 **Multi-account** — link multiple WhatsApp numbers, each in its own isolated session
 - 💬 **Captures everything** — text, voice notes, photos, videos, stickers, documents, locations, contact cards
 - 🔔 **Live notifications** — toast in the dashboard for every new message, with optional outgoing-message alerts
-- 🔍 **Full-text search** — scoped per account
+- 🔍 **Full-text search** — scoped per account, rate-limited to 30 queries / 60 s
 - 🗑 **Bulk delete** — clear individual messages or entire conversations (media files removed too)
 - ⏪ **Pagination** — load older messages on demand, no full-history downloads
 - 🔐 **API-key auth** — single-key protection on every endpoint, including the real-time SSE stream
 - 📦 **Lightweight** — runs on a 1 GB VM, single Node process, SQLite storage
-- 🎵 **In-browser playback** — voice notes, audio, and video stream directly in the dashboard
+- 🎵 **In-browser playback** — voice notes, audio, and video stream directly in the dashboard with HTTP range support (seek + resume)
 - 🖼 **Image lightbox** — click any photo to view full-size
+- 📱 **Mobile-ready** — responsive single-pane layout, touch-friendly tap targets, full-screen QR modal
+- 🔄 **Lazy reconnect** — disconnected sessions stay idle (no Chrome RAM) until you click Reconnect
 
 ---
 
@@ -170,8 +172,14 @@ The account's real name and phone number are pulled from WhatsApp once linked. R
 | **Click a photo** | Opens a full-size lightbox |
 | **Click a voice note** | Plays in place with a waveform indicator |
 | **Click a document** | Downloads via the authenticated media route |
+| **📊 button (mobile)** | Opens the stats panel as a dropdown |
+| **← button (mobile)** | Returns from the chat view to the chat list |
 
 The chat list auto-refreshes every 10 seconds. Live messages stream in via Server-Sent Events.
+
+On first load the dashboard shows a login overlay — paste your API key once and it's kept in `sessionStorage` (cleared when you close the tab). Press **Logout** in the user menu to drop the key.
+
+Below 768 px, the layout switches to a single-pane chat view with a back button, the stats bar collapses into a topbar popover, and the QR modal goes full-screen.
 
 ---
 
@@ -189,10 +197,13 @@ Code-level constants you can tune in `bot/session-manager.js`:
 
 | Constant | Default | Purpose |
 |---|---|---|
-| `QR_TIMEOUT` | 5 min | Restart the session if QR is never scanned |
-| `READY_TIMEOUT` | 40 s | Restart if WhatsApp Web doesn't load after authentication |
+| `QR_TIMEOUT` | 5 min | Stop Chrome if QR is never scanned (session goes idle until Reconnect) |
+| `READY_TIMEOUT` | 160 s | Restart if WhatsApp Web doesn't load after authentication |
 | `RECONNECT_DELAY` | 8 s | Pause between failed start and the next attempt |
+| `HEARTBEAT_MS` | 30 s | (in `database.js`) Bot status heartbeat written to SQLite |
 | `MAX_MEDIA_BYTES` | 100 MB | (in `database.js`) Files larger than this are skipped |
+| `SEARCH_LIMIT` / `SEARCH_WINDOW_MS` | 30 / 60 s | (in `dashboard/server.js`) Per-user search rate limit |
+| `max_memory_restart` | 800 MB | (in `ecosystem.config.js`) PM2 restarts the process if it exceeds this |
 
 ---
 
@@ -230,15 +241,16 @@ The bot and dashboard run in a single Node process so they share the same `Sessi
 ```
 whatsapp-vault/
 ├── bot/
-│   ├── index.js             # Entry point
-│   ├── session-manager.js   # WhatsApp session lifecycle
-│   ├── manager-instance.js  # Shared singleton holder
-│   └── database.js          # SQLite schema + queries
+│   ├── index.js             # Entry point — boots manager + dashboard in one process
+│   ├── session-manager.js   # WhatsApp session lifecycle (per-user Chrome)
+│   ├── manager-instance.js  # Shared singleton holder (avoids circular requires)
+│   └── database.js          # SQLite schema + prepared statements
 ├── dashboard/
-│   ├── server.js            # API + SSE
-│   └── public/index.html    # Dashboard UI (single file)
-├── ecosystem.config.js      # PM2 config
+│   ├── server.js            # Express API + SSE + media streaming
+│   └── public/index.html    # Dashboard UI (single self-contained file)
+├── ecosystem.config.js      # PM2 config (parses .env manually)
 ├── migrate-bin-files.js     # Optional one-shot media-rename utility
+├── update.sh                # Helper: pm2 stop → git pull → npm install → restart
 ├── package.json
 ├── .env                     # Your secrets (never commit)
 └── .gitignore
@@ -260,7 +272,9 @@ Generated at runtime:
 
 **Real-time UI** — The dashboard uses Server-Sent Events (`/api/events`) to receive `qr`, `ready`, `status`, and `message` events as they happen. Toasts appear instantly when any account receives a message.
 
-**Resilience** — Sessions auto-reconnect on disconnect with exponential backoff, isolate harmless transient errors from real ones, and recover gracefully from Chrome OOM kills (with a longer cooldown so the kernel can reclaim memory).
+**Resilience** — Sessions handle transient WhatsApp Web errors (`Session closed`, `Target closed`, etc.) without flapping, and recover gracefully from Chrome OOM kills (with a longer cooldown so the kernel can reclaim memory). When a session disconnects or QR times out it goes "lazy" — Chrome is fully torn down and the dropdown shows a red dot until the user clicks **Reconnect**, so idle accounts don't burn RAM.
+
+**Single-process design** — Bot and dashboard share one Node process and one `SessionManager` instance. PM2 with two separate apps would create two managers fighting over the same Chrome session folders, and the dashboard would never see bot events because they'd live in different processes.
 
 **Multi-tenancy** — Every database row is scoped by `user_id` with cascading foreign keys. Deleting a user removes all their messages, chats, and media in one transaction. Each user has its own Chrome session folder, so accounts can never see each other's data.
 
@@ -283,7 +297,9 @@ GET    /api/users                     List users with live status
 POST   /api/users                     Body: {name} — adds user, starts session
 DELETE /api/users/:id                 Remove user, delete all their data
 GET    /api/users/:id/qr              Current QR (data URL) and status
-POST   /api/users/:id/cancel          Cancel a pending QR session
+POST   /api/users/:id/connect         Start Chrome for an idle session (lazy reconnect)
+POST   /api/users/:id/disconnect      Stop Chrome, keep the user record (red dot stays)
+POST   /api/users/:id/cancel          Remove a brand-new user that never authenticated
 ```
 
 ### Chats and messages
@@ -300,9 +316,9 @@ DELETE /api/messages                  Body: {userId, ids: [...]}
 ```
 GET    /api/bot-status                {online, beat_at}
 GET    /api/stats?userId=N            Counts (omit userId for global stats)
-GET    /api/search?userId=N&q=...     Full-text search
-GET    /api/media/:filename           Authenticated media stream
-GET    /api/events                    SSE: qr / ready / status / message
+GET    /api/search?userId=N&q=...     Full-text search (max 30/min/user)
+GET    /api/media/:filename           Authenticated media stream (HTTP range supported)
+GET    /api/events                    SSE: qr / ready / status / message / qr_timeout
 ```
 
 ### Example
@@ -357,14 +373,30 @@ The `.wwebjs_auth/` folder preserves your linked sessions, so no QR re-scan is n
 
 ## Updating
 
+A helper script wraps the whole flow:
+
 ```bash
 cd ~/whatsapp-vault
+./update.sh
+```
+
+Or run the steps manually:
+
+```bash
+cd ~/whatsapp-vault
+pm2 stop vault
 git pull
 npm install
 pm2 restart vault
 ```
 
 Your `.env`, `vault.db`, `media/`, and `.wwebjs_auth/` are not touched.
+
+If you're upgrading from an older version that stored every attachment as `*.bin`, run the one-shot rename utility once after pulling:
+
+```bash
+npm run migrate
+```
 
 ---
 
@@ -399,7 +431,7 @@ Some ideas for future improvements:
 - [ ] Metrics endpoint (Prometheus-compatible)
 - [ ] Docker image
 - [ ] HTTPS / Let's Encrypt integration
-- [ ] Mobile-friendly responsive layout
+- [x] ~~Mobile-friendly responsive layout~~ — shipped
 
 PRs welcome.
 
