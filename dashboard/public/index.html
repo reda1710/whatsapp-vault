@@ -1130,6 +1130,10 @@
 
     /* Chat header tighter padding */
     .chat-header { padding: 10px 14px; gap: 10px; }
+
+    /* Extra bottom padding so the latest message clears the home indicator
+       / browser chrome when snapped to the bottom. */
+    .messages { padding: 16px 14px 36px; }
     .filter-bar  { padding: 8px 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .filter-bar::-webkit-scrollbar { display: none; }
     .filter-btn  { white-space: nowrap; }
@@ -1524,14 +1528,15 @@ async function selectChat(chatId, name, isGroup, count) {
   });
 
   await loadMessages(chatId);
-  // Snap to the latest message when the user opens a chat. Background reloads
-  // (SSE / poller / refresh) go through reloadCurrentChatMessages() and do
-  // NOT snap — they preserve the user's scroll position instead.
+  // On mobile we show one pane at a time; flag the body BEFORE the snap so
+  // the chat-area is laid out (display:none → display:flex) — otherwise its
+  // scrollHeight is 0 at the moment we try to scroll to the bottom.
+  document.body.classList.add('chat-open');
+  // Snap to the latest message. Background reloads (SSE / poller / refresh)
+  // go through reloadCurrentChatMessages() and do NOT snap — they preserve
+  // the user's scroll position instead.
   const box = document.getElementById('messages');
   box.scrollTop = box.scrollHeight;
-  // On mobile we show one pane at a time; flag the body so CSS hides the
-  // sidebar and reveals the chat-area full-width.
-  document.body.classList.add('chat-open');
 }
 
 // Mobile back-button: return to the chat-list view.
