@@ -1061,6 +1061,95 @@
   .toast-close { background:none; border:none; color:var(--muted); cursor:pointer; font-size:13px; padding:0; flex-shrink:0; line-height:1; }
   @keyframes toastIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
 
+  /* ── Mobile-only triggers (hidden on desktop) ──────────────────────── */
+  .chat-back-btn  { display: none; }
+  .stats-trigger  { display: none; }
+
+  /* ── Mobile breakpoint ─────────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    /* Top bar: tighter padding, hide the long live-label, condense user button */
+    .topbar { padding: 0 10px; gap: 8px; height: 52px; }
+    .logo   { font-size: 13px; }
+    .logo-icon svg { width: 22px; height: 22px; }
+    .live-label { display: none !important; }
+    .search-wrap { flex: 1; min-width: 0; max-width: none; }
+    .search-wrap input { font-size: 13px; padding: 6px 10px 6px 28px; }
+    .user-btn { min-width: 0; max-width: 110px; padding: 5px 8px; }
+    .user-btn-name { display: none; }
+    .user-caret { display: none; }
+
+    /* Stats trigger pill in topbar; hide the inline statsbar */
+    .stats-trigger {
+      display: flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px; border-radius: 8px;
+      background: var(--surface); border: 1px solid var(--border2);
+      color: var(--text); font-size: 16px; cursor: pointer; flex-shrink: 0;
+    }
+    .stats-trigger:hover { background: var(--panel); }
+
+    /* Statsbar morphs into a fixed dropdown panel under the topbar */
+    .statsbar {
+      display: none;
+      position: fixed; top: 56px; left: 8px; right: 8px;
+      grid-template-columns: 1fr;
+      background: var(--panel); border: 1px solid var(--border2);
+      border-radius: 10px; padding: 6px; z-index: 60;
+      box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    }
+    .statsbar.open { display: grid; }
+    .stat {
+      flex-direction: row; justify-content: space-between; align-items: center;
+      padding: 10px 12px; border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+    .stat:last-child { border-bottom: none; }
+    .stat-num { font-size: 16px; }
+    .stat-lbl { font-size: 10px; }
+
+    /* Main: single column, only one pane visible at a time */
+    .main { grid-template-columns: 1fr; }
+    .sidebar    { border-right: none; }
+    .chat-area  { display: none; }
+    body.chat-open .sidebar    { display: none; }
+    body.chat-open .chat-area  { display: flex; }
+
+    /* Back button visible on mobile */
+    .chat-back-btn {
+      display: flex; align-items: center; justify-content: center;
+      width: 36px; height: 36px; border-radius: 50%;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text); font-size: 20px; padding: 0; flex-shrink: 0;
+    }
+    .chat-back-btn:hover, .chat-back-btn:active { background: var(--panel); }
+
+    /* Touch-friendly tap targets */
+    .chat-item       { min-height: 56px; }
+    .user-menu-item  { min-height: 48px; padding: 12px 14px; }
+    .filter-btn      { padding: 8px 12px; font-size: 11px; }
+    .play-btn        { width: 38px; height: 38px; font-size: 16px; }
+
+    /* Chat header tighter padding */
+    .chat-header { padding: 10px 14px; gap: 10px; }
+    .filter-bar  { padding: 8px 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .filter-bar::-webkit-scrollbar { display: none; }
+    .filter-btn  { white-space: nowrap; }
+
+    /* QR modal: full-screen on mobile */
+    .qr-modal-overlay { padding: 0; }
+    .qr-modal {
+      width: 100%; height: 100%; max-width: none;
+      border-radius: 0; padding: 24px 20px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+
+    /* Reconnect banner stacks if cramped */
+    .reconnect-banner { flex-wrap: wrap; gap: 6px; padding: 8px 12px; font-size: 11px; }
+    .reconnect-banner button { padding: 6px 14px; min-height: 32px; }
+
+    /* Toasts: bottom-center, full-width, above virtual keyboard */
+    #toast-container { left: 8px; right: 8px; bottom: 12px; align-items: stretch; }
+    .toast { max-width: none; }
+  }
 </style>
 </head>
 <body>
@@ -1084,6 +1173,9 @@
 
   <div class="dot-live" id="dot-live" title="Bot connection status" style="display:none"></div>
   <span class="live-label" id="live-label" style="display:none">CONNECTING</span>
+
+  <!-- Mobile-only: trigger that toggles the statsbar as a dropdown panel -->
+  <button class="stats-trigger" onclick="toggleStatsMenu(event)" aria-label="Show stats">📊</button>
 
   <!-- User selector -->
   <div class="user-selector">
@@ -1148,6 +1240,7 @@
 
     <!-- Chat header -->
     <div class="chat-header" id="chat-header" style="display:none">
+      <button class="chat-back-btn" onclick="closeChatView()" aria-label="Back to chat list">←</button>
       <div class="avatar" id="chat-avatar">?</div>
       <div>
         <div class="name" id="chat-name"></div>
@@ -1436,6 +1529,21 @@ async function selectChat(chatId, name, isGroup, count) {
   // NOT snap — they preserve the user's scroll position instead.
   const box = document.getElementById('messages');
   box.scrollTop = box.scrollHeight;
+  // On mobile we show one pane at a time; flag the body so CSS hides the
+  // sidebar and reveals the chat-area full-width.
+  document.body.classList.add('chat-open');
+}
+
+// Mobile back-button: return to the chat-list view.
+function closeChatView() {
+  document.body.classList.remove('chat-open');
+}
+
+// Mobile stats popover toggle. The statsbar element is reused as a dropdown
+// panel via CSS; this just flips the .open class.
+function toggleStatsMenu(e) {
+  if (e) e.stopPropagation();
+  document.querySelector('.statsbar').classList.toggle('open');
 }
 
 // ── Load messages ───────────────────────────────────────────────────────
@@ -2087,6 +2195,13 @@ document.addEventListener('click', e => {
     document.getElementById('user-menu').classList.remove('open');
     userMenuOpen = false;
   }
+  // Same for the mobile stats popover
+  const sb = document.querySelector('.statsbar');
+  if (sb && sb.classList.contains('open')
+      && !sb.contains(e.target)
+      && !e.target.closest('.stats-trigger')) {
+    sb.classList.remove('open');
+  }
 });
 
 // ── Select user ──────────────────────────────────────────────────────────
@@ -2097,6 +2212,9 @@ async function selectUser(userId) {
   allMessages   = [];
   document.getElementById('user-menu').classList.remove('open');
   userMenuOpen = false;
+  // On mobile, switching accounts should drop the user back to the chat list,
+  // not leave them parked on the now-empty chat-area panel.
+  document.body.classList.remove('chat-open');
   updateUserBtn();
   updateReconnectBanner();
 
