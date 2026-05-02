@@ -1475,14 +1475,22 @@ async function loadMoreMessages() {
 
 // Reload the active chat without yanking the user's scroll position.
 // loadMessages wipes box.innerHTML on non-append calls, which resets scrollTop
-// to 0. This helper restores it after the reload using the standard chat-UI
-// rule: if the user was within ~100px of the bottom we snap to the new bottom
-// so live messages stay visible; otherwise we preserve the absolute scrollTop
-// so the same content stays under the user's eye (preserving distance-from-
-// bottom would drift the view down by one message height per update).
+// to 0 AND replaces voice/video elements (resetting their visual timer to
+// 0:00 even though the underlying playback continues). To avoid both problems:
+//   - Skip the reload entirely while any media is actively playing.
+//   - Otherwise, preserve scroll: snap to the new bottom if the user was
+//     within ~100px of it; else keep their absolute scrollTop so the same
+//     content stays under their eye.
 async function reloadCurrentChatMessages() {
   if (!currentChatId) return;
   const box = document.getElementById('messages');
+  // Skip if a voice note is playing — currentAudio is a JS Audio object that
+  // survives DOM wipes, but the visual timer span gets replaced.
+  if (currentAudio && !currentAudio.paused) return;
+  // Skip if any inline <video> is playing.
+  for (const v of box.querySelectorAll('video')) {
+    if (!v.paused) return;
+  }
   const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
   const oldScrollTop  = box.scrollTop;
   await loadMessages(currentChatId, false);
