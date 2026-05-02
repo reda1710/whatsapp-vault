@@ -162,7 +162,7 @@ The account's real name and phone number are pulled from WhatsApp once linked. R
 
 | Element | What it does |
 |---|---|
-| **User dropdown** (top-right) | Switch between linked accounts. Status dot: 🟢 online · 🟡 awaiting QR · ⚪ offline |
+| **User dropdown** (top-right) | Switch between linked accounts. Status dot: 🟢 online · 🟡 authenticated · 🔴 awaiting QR · ⚪ offline |
 | **Search box** | Full-text search across the selected user's messages (limit 100 results) |
 | **Filter pills** | Filter by message type (All, Voice, Photos, Videos, Stickers, etc.) |
 | **Hover a chat** | `✕` button to delete the entire conversation |
