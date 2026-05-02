@@ -156,7 +156,7 @@ function deleteUser(id) {
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────────
-const HEARTBEAT_MS = 30000; // 30s heartbeat
+const HEARTBEAT_MS = 30000;
 let heartbeatTimer = null;
 
 function setBotOnline() {
@@ -177,7 +177,7 @@ function setBotOffline() {
 function getBotStatus() {
   const row = stmts.getBotStatus.get();
   if (!row) return { online: false };
-  const stale = Math.floor(Date.now() / 1000) - row.beat_at > 90; // 90s stale threshold (3x heartbeat)
+  const stale = Math.floor(Date.now() / 1000) - row.beat_at > 90;
   return { online: row.state === 'online' && !stale, beat_at: row.beat_at };
 }
 
@@ -195,7 +195,7 @@ function saveMessage(userId, msg, chatInfo) {
       mediaBuf = null;
     }
   }
-
+  
   let insertedId = null;
 
   db.transaction(() => {
@@ -219,7 +219,7 @@ function saveMessage(userId, msg, chatInfo) {
       lat:        msg.lat       || null,
       lng:        msg.lng       || null,
     });
-    insertedId = result.lastInsertRowid;
+        insertedId = result.lastInsertRowid;
 
     stmts.upsertChat.run({
       user_id:     userId,
@@ -239,8 +239,6 @@ function saveMessage(userId, msg, chatInfo) {
   return { mediaFile, filename, messageId: insertedId };
 }
 
-// Patch a previously-saved message with media that arrived late
-// (used when WhatsApp's CDN lagged behind the message event for stickers etc.)
 function attachMediaToMessage(messageId, base64Data, mimetype) {
   if (!messageId || !base64Data || !mimetype) return false;
   const buf = Buffer.from(base64Data, 'base64');
@@ -266,10 +264,10 @@ function deleteMessages(userId, ids) {
 
   const ph = safeIds.map(() => '?').join(',');
   const rows = db.prepare(`SELECT media_file FROM messages WHERE user_id = ? AND id IN (${ph})`).all(userId, ...safeIds);
-  rows.forEach(r => {
-    if (r.media_file) {
+  rows.forEach(r => { 
+    if (r.media_file) { 
       try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
-      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); }
+      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); } 
     }
   });
 
@@ -291,10 +289,10 @@ function deleteMessages(userId, ids) {
 // ── Delete chat ──────────────────────────────────────────────────────────────
 function deleteChat(userId, chatId) {
   const rows = db.prepare('SELECT media_file FROM messages WHERE user_id = ? AND chat_id = ?').all(userId, chatId);
-  rows.forEach(r => {
-    if (r.media_file) {
+  rows.forEach(r => { 
+    if (r.media_file) { 
       try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
-      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); }
+      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); } 
     }
   });
   const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
@@ -310,7 +308,6 @@ function getExtension(mime) {
   const base = String(mime).toLowerCase().split(';')[0].trim();
   const map = {
     'audio/ogg':       'ogg',
-    'audio/opus':      'ogg',  // some clients report this MIME for Opus voice notes
     'audio/mpeg':      'mp3',
     'audio/mp4':       'm4a',
     'audio/aac':       'aac',

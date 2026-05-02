@@ -30,7 +30,7 @@ module.exports = {
       script:                    'bot/index.js',
       cwd:                       __dirname,
       env:                       env,
-      max_memory_restart:        '900M',
+      max_memory_restart:        '800M',
       restart_delay:             5000,
       exp_backoff_restart_delay: 100,
       log_date_format:           'YYYY-MM-DD HH:mm:ss',

@@ -8,7 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { execSync } = require('child_process');
 const { SessionManager } = require('./session-manager');
 const db = require('./database');
 
@@ -39,12 +39,11 @@ function logRam() {
 
   let chromeMB = 0;
   try {
-    const pids = spawnSync('pgrep', ['-f', 'google-chrome|chromium'], { encoding: 'utf8' })
-      .stdout.trim().split('\n').filter(Boolean);
-    if (pids.length) {
-      const out = spawnSync('ps', ['-o', 'rss=', '-p', pids.join(',')], { encoding: 'utf8' }).stdout;
-      chromeMB = Math.round(out.trim().split('\n').reduce((s, v) => s + (parseInt(v) || 0), 0) / 1024);
-    }
+    const out = execSync(
+      'ps -eo rss,comm | grep -i "chrome\\|chromium" | awk \'{s+=$1} END {print s+0}\'',
+      { encoding: 'utf8', shell: true }
+    );
+    chromeMB = Math.round((parseInt(out.trim()) || 0) / 1024);
   } catch (_) {}
 
   const totalMB = nodeMB + chromeMB;

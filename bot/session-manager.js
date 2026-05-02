@@ -5,13 +5,13 @@ const qrcode               = require('qrcode-terminal');
 const qrcodeLib            = require('qrcode');
 const path                 = require('path');
 const fs                   = require('fs');
-const { spawnSync }        = require('child_process');
+const { execSync }         = require('child_process');
 const { EventEmitter }     = require('events');
 const db                   = require('./database');
 
 const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
-const READY_TIMEOUT = 40 * 1000;
+const READY_TIMEOUT = 90 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
 
 const CHROME_BIN =
@@ -28,7 +28,7 @@ const isHarmless = m => HARMLESS.some(s => m.includes(s));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function killChrome(userId) {
-  try { spawnSync('pkill', ['-9', '-f', `user-data-dir.*session-${userId}`], { stdio: 'ignore' }); }
+  try { execSync(`pkill -9 -f "user-data-dir.*session-${userId}" 2>/dev/null; true`, { shell: true }); } 
   catch (err) { console.warn(`⚠️  Failed to kill Chrome for user ${userId}:`, err.message); }
 }
 
@@ -39,13 +39,13 @@ function clearLock(userId) {
     const scan = d => {
       for (const e of fs.readdirSync(d)) {
         const p = path.join(d, e);
-        if (e === 'SingletonLock') {
-          try { fs.unlinkSync(p); }
+        if (e === 'SingletonLock') { 
+          try { fs.unlinkSync(p); } 
           catch (err) { console.warn(`⚠️  Failed to clear SingletonLock for user ${userId}:`, err.message); }
         }
-        else {
-          try { if (fs.statSync(p).isDirectory()) scan(p); }
-          catch (err) { console.warn(`⚠️  Failed to scan directory ${p}:`, err.message); }
+        else { 
+          try { if (fs.statSync(p).isDirectory()) scan(p); } 
+          catch (err) { console.warn(`⚠️  Failed to scan directory for user ${userId}:`, err.message); }
         }
       }
     };
@@ -192,8 +192,8 @@ class Session extends EventEmitter {
       console.error(`❌ [${this.userName}] Auth failed:`, msg);
       db.updateUser(this.userId, this.userName, null, 'offline');
       await this._destroy();
-      try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); }
-      catch (err) { console.warn(`⚠️  Failed to remove auth folder for user ${this.userId}:`, err.message); }
+      try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); } 
+      catch (err) { console.warn(`⚠️  Failed to remove session files for user ${this.userId}:`, err.message); }
       await sleep(RECONNECT_DELAY);
       setTimeout(() => this.start(), 0);
     });
@@ -222,9 +222,6 @@ class Session extends EventEmitter {
       const isOOM = err.message.includes('Failed to launch the browser process');
       console.error(`❌ [${this.userName}] Fatal init:`, err.message.split('\n')[0]);
       await this._destroy();
-      // Chrome OOM crashes need more breathing room than transient errors.
-      // The kernel needs time to reclaim memory, otherwise the next launch
-      // also OOMs immediately and we get a tight failure loop.
       await sleep(isOOM ? 30000 : RECONNECT_DELAY);
       setTimeout(() => this.start(), 0);
     }
@@ -249,7 +246,7 @@ class Session extends EventEmitter {
     const c = this.client;
     this.client = null;
     if (!c) return;
-    try { await c.destroy(); } catch (err) { console.warn(`⚠️  Error destroying client for user ${this.userId}:`, err.message); }
+    try { await c.destroy(); } catch (err) { console.warn(`⚠️  Failed to destroy client for user ${this.userId}:`, err.message); }
     await sleep(1500);
     killChrome(this.userId);
     clearLock(this.userId);
@@ -317,11 +314,9 @@ class Session extends EventEmitter {
       }
 
       const { mediaFile, messageId } = db.saveMessage(this.userId, entry, chatInfo);
-
-      // For freshly-sent stickers/images, WhatsApp's CDN sometimes lags behind
-      // the message event by a few seconds — the initial download returns null.
-      // If the message has media but we got nothing, schedule a delayed retry
-      // and patch the saved row once the file is available.
+      // If message has media but it wasn't downloaded successfully
+      // schedule retries to fetch it later.
+      // This can happen when WhatsApp's CDN is slow to propagate media.
       if (msg.hasMedia && !mediaFile && messageId) {
         this._enqueueLateMediaFetch(msg, messageId, chatInfo);
       }
@@ -446,8 +441,8 @@ class SessionManager extends EventEmitter {
       this.sessions.delete(userId);
     }
     // Remove session auth folder
-    try { fs.rmSync(path.join(AUTH_BASE, `session-${userId}`), { recursive: true, force: true }); }
-    catch (err) { console.warn(`⚠️  Failed to remove auth folder for user ${userId}:`, err.message); }
+    try { fs.rmSync(path.join(AUTH_BASE, `session-${userId}`), { recursive: true, force: true }); } 
+    catch (err) { console.warn(`⚠️  Failed to remove session files for user ${userId}:`, err.message); }
     db.deleteUser(userId);
   }
 
