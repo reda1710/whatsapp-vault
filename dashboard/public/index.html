@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>WhatsApp Vault</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%2325d366'/><path d='M8.886 7.17c.183.005.386.015.579.443.128.286.343.81.519 1.238.137.333.249.607.277.663.064.128.104.276.02.448l-.029.058c-.067.14-.115.24-.229.37-.046.054-.095.113-.143.171-.085.103-.17.205-.242.277-.129.128-.262.266-.114.522.149.256.668 1.098 1.435 1.778.824.734 1.541 1.043 1.903 1.2.07.03.127.054.169.075.258.128.41.108.56-.064.148-.172.643-.748.816-1.004.169-.256.341-.217.578-.128.238.088 1.504.71 1.762.838.05.026.099.048.143.07.179.085.3.144.352.231.064.108.064.62-.149 1.221-.218.6-1.266 1.176-1.741 1.221-.045.004-.09.01-.136.015-.435.053-.988.12-2.957-.655-2.425-.954-4.026-3.32-4.35-3.798l-.058-.077c-.147-.197-1.048-1.403-1.048-2.647 0-1.19.586-1.81.853-2.092.017-.018.033-.035.047-.05.237-.256.514-.32.687-.32.173 0 .346 0 .495.005z' fill='white'/><path fill-rule='evenodd' clip-rule='evenodd' d='M2.184 21.331c-.082.297.188.572.486.494l4.608-1.204c1.454.788 3.092 1.207 4.759 1.207h.005c5.486 0 9.958-4.446 9.958-9.911 0-2.65-1.034-5.14-2.914-7.011C17.207 3.034 14.708 2 12.042 2 6.556 2 2.084 6.446 2.084 11.911c-.001 1.74.458 3.448 1.331 4.954l-1.231 4.466zm2.677-4.069c.107-.387.054-.802-.148-1.15-.74-1.278-1.13-2.728-1.129-4.202 0-4.63 3.794-8.411 8.458-8.411 2.27 0 4.388.877 5.986 2.468 1.597 1.59 2.472 3.698 2.472 5.948 0 4.63-3.793 8.411-8.458 8.411h-.005c-1.417 0-2.809-.355-4.045-1.025-.335-.181-.726-.229-1.094-.132l-2.762.722.725-2.629z' fill='white'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1150,8 +1150,14 @@
     .reconnect-banner { flex-wrap: wrap; gap: 6px; padding: 8px 12px; font-size: 11px; }
     .reconnect-banner button { padding: 6px 14px; min-height: 32px; }
 
-    /* Toasts: bottom-center, full-width, above virtual keyboard */
-    #toast-container { left: 8px; right: 8px; bottom: 12px; align-items: stretch; }
+    /* Toasts: bottom-center, full-width, above the home indicator / Safari
+       bottom toolbar. Without env(safe-area-inset-bottom), iOS renders the
+       toast behind the system UI and it looks like nothing happened. */
+    #toast-container {
+      left: 8px; right: 8px;
+      bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+      align-items: stretch;
+    }
     .toast { max-width: none; }
   }
 </style>
