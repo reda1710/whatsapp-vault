@@ -11,7 +11,7 @@ const db                   = require('./database');
 
 const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
-const READY_TIMEOUT = 90 * 1000;
+const READY_TIMEOUT = 160 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
 
 const CHROME_BIN =
@@ -69,7 +69,7 @@ class Session extends EventEmitter {
     this.booting       = false;
     this.stopping      = false;
     this.authenticated = false;
-    this.status        = 'offline'; // 'offline' | 'qr' | 'online'
+    this.status        = 'offline'; // 'offline' | 'qr' | 'authenticated' | 'online'
     this.qrData        = null;      // latest QR as base64 PNG data URL
     this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
     this.processingLateMedia  = false;
@@ -134,10 +134,10 @@ class Session extends EventEmitter {
 
       this.qrTimer = setTimeout(async () => {
         if (!isActive()) return;
-        console.warn(`⏰ [${this.userName}] QR timeout — restarting\n`);
+        console.warn(`⏰ [${this.userName}] QR timeout — stopping Chrome (lazy: waiting for user to reconnect)\n`);
         await this._destroy();
-        await sleep(RECONNECT_DELAY);
-        setTimeout(() => this.start(), 0);
+        // status stays 'qr' (red dot); emit so any open modal closes
+        this.emit('qr_timeout', { userId: this.userId });
       }, QR_TIMEOUT);
     });
 
@@ -156,6 +156,7 @@ class Session extends EventEmitter {
       this.readyTimer = null;
       this.qrData     = null;
 
+      this._setStatus('authenticated');
       console.log(`🔐 [${this.userName}] Authenticated\n`);
 
       this.readyTimer = setTimeout(async () => {
@@ -194,22 +195,21 @@ class Session extends EventEmitter {
     client.on('auth_failure', async msg => {
       if (!isActive()) return;
       console.error(`❌ [${this.userName}] Auth failed:`, msg);
-      db.updateUser(this.userId, this.userName, null, 'offline');
       await this._destroy();
-      try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); } 
+      try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); }
       catch (err) { console.warn(`⚠️  Failed to remove session files for user ${this.userId}:`, err.message); }
-      await sleep(RECONNECT_DELAY);
-      setTimeout(() => this.start(), 0);
+      // Lazy: stay in 'qr' (red dot), wait for user to click Reconnect
+      this._setStatus('qr');
+      db.updateUser(this.userId, this.userName, null, 'qr');
     });
 
     client.on('disconnected', async reason => {
       if (!isActive() || this.stopping) return;
       console.log(`🔌 [${this.userName}] Disconnected (${reason})\n`);
-      this._setStatus('offline');
+      // Lazy: red dot in dropdown, no Chrome until user clicks Reconnect
+      this._setStatus('qr');
       db.setBotOffline();
       await this._destroy();
-      await sleep(RECONNECT_DELAY);
-      setTimeout(() => this.start(), 0);
     });
 
     client.on('message',        msg => { if (isActive()) this._handleMessage(msg); });
@@ -418,18 +418,39 @@ class SessionManager extends EventEmitter {
   }
 
   async startSession(userId, userName) {
-    if (this.sessions.has(userId)) return this.sessions.get(userId);
-    const session = new Session(userId, userName);
-    this.sessions.set(userId, session);
+    let session = this.sessions.get(userId);
+    if (session && session.client) return session; // already running with live Chrome
+    if (!session) {
+      // userName is required for brand-new sessions; for reconnects we can fall back to DB
+      if (!userName) {
+        const u = db.getAllUsers().find(x => x.id === userId);
+        if (!u) return null;
+        userName = u.name;
+      }
+      session = new Session(userId, userName);
+      this.sessions.set(userId, session);
 
-    // Bubble up events to the manager
-    session.on('qr',      e => this.emit('qr',      e));
-    session.on('ready',   e => this.emit('ready',   e));
-    session.on('status',  e => this.emit('status',  e));
-    session.on('message', e => this.emit('message', e));
-
+      // Bubble up events to the manager
+      session.on('qr',         e => this.emit('qr',         e));
+      session.on('ready',      e => this.emit('ready',      e));
+      session.on('status',     e => this.emit('status',     e));
+      session.on('message',    e => this.emit('message',    e));
+      session.on('qr_timeout', e => this.emit('qr_timeout', e));
+    }
     session.start(); // async — don't await, returns immediately
     return session;
+  }
+
+  // Stop Chrome but keep the user record. Used when the user closes the QR
+  // modal without scanning — we want the dropdown to stay red ('qr'), not
+  // gray ('offline'), so the Reconnect banner remains visible.
+  async disconnectSession(userId) {
+    const s = this.sessions.get(userId);
+    if (!s) return;
+    s.stopping = true;
+    s._setStatus('qr');
+    await s._destroy();
+    s.stopping = false;
   }
 
   async addUser(name) {

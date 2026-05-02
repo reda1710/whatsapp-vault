@@ -82,10 +82,11 @@ function broadcast(event, data) {
 }
 
 // Wire manager events → SSE broadcast
-manager.on('qr',      data => broadcast('qr',      data));
-manager.on('ready',   data => broadcast('ready',   data));
-manager.on('status',  data => broadcast('status',  data));
-manager.on('message', data => broadcast('message', data));
+manager.on('qr',         data => broadcast('qr',         data));
+manager.on('ready',      data => broadcast('ready',      data));
+manager.on('status',     data => broadcast('status',     data));
+manager.on('message',    data => broadcast('message',    data));
+manager.on('qr_timeout', data => broadcast('qr_timeout', data));
 
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type',  'text/event-stream');
@@ -129,6 +130,29 @@ app.post('/api/users', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// Lazy reconnect — start Chrome and let WhatsApp Web fire 'qr' or go straight
+// to 'authenticated' (if cached auth is still valid). Used when the user clicks
+// the Reconnect banner for an account in the 'qr' (red dot) state.
+app.post('/api/users/:id/connect', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const session = await manager.startSession(id);
+    if (!session) return res.status(404).json({ error: 'not found' });
+    res.json({ status: 'starting' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Stop Chrome but keep the user record. Called when the user closes the QR
+// modal without scanning — we want the dropdown dot to stay red ('qr'),
+// not gray ('offline'), so the Reconnect banner remains visible.
+app.post('/api/users/:id/disconnect', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    await manager.disconnectSession(id);
+    res.json({ status: 'disconnected' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // Cancel a pending QR session — only removes the user if they never authenticated.
 // Safe to call when the user dismisses the QR modal before scanning.

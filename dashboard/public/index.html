@@ -950,9 +950,21 @@
   }
   .user-btn-name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; }
   .user-status-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; background:var(--muted); }
-  .user-status-dot.online  { background:var(--accent); animation:pulse 2s ease-in-out infinite; }
-  .user-status-dot.qr      { background:var(--amber); }
-  .user-status-dot.offline { background:var(--muted); }
+  .user-status-dot.online        { background:var(--accent); animation:pulse 2s ease-in-out infinite; }
+  .user-status-dot.authenticated { background:var(--amber); }
+  .user-status-dot.qr            { background:var(--coral); }
+  .user-status-dot.offline       { background:var(--muted); }
+  .reconnect-banner {
+    display:flex; align-items:center; gap:10px; padding:8px 12px;
+    background:rgba(255,107,107,.08); border-bottom:1px solid var(--border2);
+    font-size:12px; color:var(--text);
+  }
+  .reconnect-banner span { flex:1; }
+  .reconnect-banner button {
+    background:var(--coral); color:#fff; border:none; padding:5px 12px;
+    border-radius:6px; font-size:12px; font-weight:600; cursor:pointer;
+  }
+  .reconnect-banner button:hover { filter:brightness(1.1); }
   .user-caret { font-size:9px; color:var(--muted); flex-shrink:0; }
   .user-menu {
     display:none; position:absolute; top:calc(100% + 6px); right:0;
@@ -1117,6 +1129,10 @@
     <div class="sidebar-head">
       <span>Conversations</span>
       <span id="chat-count-lbl">0</span>
+    </div>
+    <div id="reconnect-banner" class="reconnect-banner" style="display:none">
+      <span>📵 Account disconnected — historical chats are still readable</span>
+      <button onclick="reconnectCurrentUser()">Reconnect</button>
     </div>
     <div class="chat-list" id="chat-list">
       <div class="empty-list">
@@ -1911,7 +1927,7 @@ async function apiDeleteChat(chatId) {
 // ── Multi-user state ─────────────────────────────────────────────────────
 let users         = [];          // [{id, name, phone, status}, ...]
 let currentUserId = null;        // selected user's DB id
-let userStatuses  = {};          // userId → 'online'|'qr'|'offline'
+let userStatuses  = {};          // userId → 'online'|'authenticated'|'qr'|'offline'
 let qrModalUserId    = null;  // which user's QR modal is open
 let qrModalIsNewUser = false; // true if user was just created and has never scanned
 let sseSource     = null;        // EventSource connection
@@ -2018,6 +2034,7 @@ async function selectUser(userId) {
   document.getElementById('user-menu').classList.remove('open');
   userMenuOpen = false;
   updateUserBtn();
+  updateReconnectBanner();
 
   // Reset chat area
   document.getElementById('chat-header').style.display = 'none';
@@ -2120,20 +2137,44 @@ async function closeQRModal() {
   const isNew     = qrModalIsNewUser;
   qrModalUserId    = null;
   qrModalIsNewUser = false;
+  if (!cancelId) return;
 
-  // If this was a brand-new user who never scanned, tell the server to
-  // stop Chrome and remove them — otherwise QR codes keep generating forever.
-  if (cancelId && isNew) {
+  if (isNew) {
+    // Brand-new user who never scanned — stop Chrome and remove them.
     try {
       const r = await apiFetch(`${API}/users/${cancelId}/cancel`, { method: 'POST' });
       const d = await r.json();
       if (d.removed) {
-        // Remove from local users list so they don't appear in the selector
         users = users.filter(u => u.id !== cancelId);
         renderUserSelector();
       }
     } catch (_) {}
+  } else {
+    // Existing user dismissed the Reconnect modal — stop Chrome but keep the
+    // user. Status stays 'qr' (red dot) so the Reconnect banner remains visible.
+    try { await apiFetch(`${API}/users/${cancelId}/disconnect`, { method: 'POST' }); } catch (_) {}
   }
+}
+
+// Show/hide the "Account disconnected — Reconnect" banner above the chat list,
+// based on the current user's status. Called from selectUser() and SSE handlers.
+function updateReconnectBanner() {
+  const banner = document.getElementById('reconnect-banner');
+  if (!banner) return;
+  if (!currentUserId) { banner.style.display = 'none'; return; }
+  const st = userStatuses[currentUserId];
+  banner.style.display = (st === 'qr') ? 'flex' : 'none';
+}
+
+// Triggered by the Reconnect button — start the session and open the QR modal.
+async function reconnectCurrentUser() {
+  if (!currentUserId) return;
+  const user = users.find(u => u.id === currentUserId);
+  if (!user) return;
+  try { await apiFetch(`${API}/users/${currentUserId}/connect`, { method: 'POST' }); }
+  catch (e) { showToast('❌', 'Reconnect failed', e.message); return; }
+  qrModalIsNewUser = false;
+  openQRModal(user);
 }
 
 async function pollQR(userId) {
@@ -2178,7 +2219,7 @@ function connectSSE() {
   sseSource.addEventListener('qr', e => {
     const { userId, qr } = JSON.parse(e.data);
     userStatuses[userId] = 'qr';
-    renderUserMenu(); updateUserBtn();
+    renderUserMenu(); updateUserBtn(); updateReconnectBanner();
     if (qrModalUserId === userId) renderQRInModal(qr);
   });
 
@@ -2188,7 +2229,7 @@ function connectSSE() {
     // Update name in local users array (WhatsApp may have returned real name)
     const u = users.find(x => x.id === userId);
     if (u) u.name = name;
-    renderUserMenu(); updateUserBtn();
+    renderUserMenu(); updateUserBtn(); updateReconnectBanner();
     // Close QR modal if this is the user being linked
     if (qrModalUserId === userId) {
       document.getElementById('qr-status-badge').textContent = '✅ Connected!';
@@ -2202,7 +2243,22 @@ function connectSSE() {
   sseSource.addEventListener('status', e => {
     const { userId, status } = JSON.parse(e.data);
     userStatuses[userId] = status;
-    renderUserMenu(); updateUserBtn();
+    renderUserMenu(); updateUserBtn(); updateReconnectBanner();
+    // If the QR modal is open for this user and the scan just landed,
+    // swap the QR for a spinner and update the badge while chats sync.
+    if (qrModalUserId === userId && status === 'authenticated') {
+      document.getElementById('qr-box').innerHTML            = '<div class="qr-spinner"></div>';
+      document.getElementById('qr-status-badge').textContent = '✓ Scanned — syncing chats...';
+      document.getElementById('qr-status-badge').className   = 'qr-status waiting';
+    }
+  });
+
+  sseSource.addEventListener('qr_timeout', e => {
+    const { userId } = JSON.parse(e.data);
+    // Auto-close the modal if it's open for this user — Chrome was just destroyed.
+    // For brand-new users, the existing /cancel flow inside closeQRModal removes them;
+    // for existing users, /disconnect is a no-op since Chrome is already gone.
+    if (qrModalUserId === userId) closeQRModal();
   });
 
   sseSource.addEventListener('message', e => {
