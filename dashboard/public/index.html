@@ -1437,7 +1437,7 @@ let msgOffset    = 0;
 const MSG_LIMIT  = 100;   // messages loaded per page
 let hasMoreMsgs  = false;
 
-async function loadMessages(chatId, append = false, preserveBottomDistance = null) {
+async function loadMessages(chatId, append = false) {
   const box = document.getElementById('messages');
   if (!append) {
     msgOffset = 0;
@@ -1451,16 +1451,8 @@ async function loadMessages(chatId, append = false, preserveBottomDistance = nul
     allMessages = append ? [...allMessages, ...page] : page;
     msgOffset  += page.length;
     renderMessages();
-    if (!append) {
-      // SSE-triggered reload passes the prior distance-from-bottom; restore it
-      // so a user reading older messages isn't yanked to the latest. Initial
-      // chat opens pass null and snap to the latest message as before.
-      if (preserveBottomDistance != null) {
-        box.scrollTop = box.scrollHeight - box.clientHeight - preserveBottomDistance;
-      } else {
-        box.scrollTop = box.scrollHeight;
-      }
-    }
+    // Scroll to bottom only on first load
+    if (!append) box.scrollTop = box.scrollHeight;
   } catch {
     if (!append) box.innerHTML = `<div class="empty"><h3>Failed to load</h3></div>`;
   }
@@ -2293,15 +2285,7 @@ function connectSSE() {
     // Refresh chat list if this message belongs to the active user
     if (userId === currentUserId) {
       loadChats();
-      if (currentChatId) {
-        // Capture how far the user is from the bottom BEFORE the reload
-        // clears the scroll. If they were at the bottom (distance ≈ 0),
-        // they'll snap to the new bottom. If they were scrolled up reading
-        // history, they stay parked at the same content.
-        const box = document.getElementById('messages');
-        const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
-        loadMessages(currentChatId, false, distFromBottom);
-      }
+      if (currentChatId) loadMessages(currentChatId, false);
     }
   });
 
