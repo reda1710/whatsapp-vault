@@ -1468,6 +1468,20 @@ async function loadMoreMessages() {
   box.scrollTop = box.scrollHeight - prevH;
 }
 
+// Reload the active chat without yanking the user's scroll position.
+// loadMessages wipes box.innerHTML on non-append calls, which resets scrollTop
+// to 0; this helper captures distance-from-bottom before the reload and
+// restores it after. Use this for any background/auto refresh of the active
+// chat (SSE message, 10s poller, refresh()) — NOT for explicit user actions
+// like "open this chat" or "delete messages" where landing at top is fine.
+async function reloadCurrentChatMessages() {
+  if (!currentChatId) return;
+  const box = document.getElementById('messages');
+  const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
+  await loadMessages(currentChatId, false);
+  box.scrollTop = box.scrollHeight - box.clientHeight - distFromBottom;
+}
+
 function renderMessages() {
   const box = document.getElementById('messages');
   let msgs = allMessages;
@@ -2286,15 +2300,7 @@ function connectSSE() {
     // Refresh chat list if this message belongs to the active user
     if (userId === currentUserId) {
       loadChats();
-      if (currentChatId) {
-        // loadMessages wipes box.innerHTML and resets scrollTop to 0. Capture
-        // distance-from-bottom now and restore it after the re-render so the
-        // user stays parked on whatever they were reading.
-        const box = document.getElementById('messages');
-        const distFromBottom = box.scrollHeight - box.scrollTop - box.clientHeight;
-        await loadMessages(currentChatId, false);
-        box.scrollTop = box.scrollHeight - box.clientHeight - distFromBottom;
-      }
+      await reloadCurrentChatMessages();
     }
   });
 
@@ -2328,7 +2334,7 @@ async function refresh() {
   await loadUsers();
   await loadStats();
   await loadChats();
-  if (currentChatId) await loadMessages(currentChatId, false);
+  await reloadCurrentChatMessages();
 }
 
 // ── Init ────────────────────────────────────────────────────────────────
@@ -2350,7 +2356,7 @@ async function refresh() {
       refreshTimer = setInterval(async () => {
         await loadStats();
         await loadChats();
-        if (currentChatId) await loadMessages(currentChatId, false);
+        await reloadCurrentChatMessages();
       }, 10000);
     } catch {
       document.getElementById('login-overlay').classList.add('open');
