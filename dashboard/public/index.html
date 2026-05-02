@@ -574,6 +574,7 @@
     font-size: 12px;
     flex-direction: column;
     gap: 8px;
+    padding-top: 40px;
   }
 
   /* ── Lightbox ────────────────────────────────────── */
@@ -1452,7 +1453,7 @@ async function loadMessages(chatId, append = false) {
     msgOffset  += page.length;
     renderMessages();
     // Scroll to bottom only on first load
-    if (!append) box.scrollTop = box.scrollHeight;
+    // if (!append) box.scrollTop = box.scrollHeight;
   } catch {
     if (!append) box.innerHTML = `<div class="empty"><h3>Failed to load</h3></div>`;
   }
