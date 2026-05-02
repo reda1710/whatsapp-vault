@@ -52,7 +52,7 @@ function logRam() {
 
 // Start all existing sessions (after the dashboard is listening)
 manager.startAll().catch(e => console.error('Startup error:', e));
-const ramInterval = setInterval(logRam, 30_000);
+const ramInterval = setInterval(logRam, 300_000);
 
 // ── Graceful shutdown ────────────────────────────────────────────────────────
 let stopping = false;
