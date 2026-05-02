@@ -1473,28 +1473,58 @@ async function loadMoreMessages() {
   box.scrollTop = box.scrollHeight - prevH;
 }
 
-// Reload the active chat without yanking the user's scroll position.
-// loadMessages wipes box.innerHTML on non-append calls, which resets scrollTop
-// to 0 AND replaces voice/video elements (resetting their visual timer to
-// 0:00 even though the underlying playback continues). To avoid both problems:
-//   - Skip the reload entirely while any media is actively playing.
-//   - Otherwise, preserve scroll: snap to the new bottom if the user was
-//     within ~100px of it; else keep their absolute scrollTop so the same
-//     content stays under their eye.
+// Reload the active chat without yanking the user's scroll position OR
+// destroying playback state. loadMessages wipes box.innerHTML, which:
+//   - resets scrollTop to 0
+//   - replaces every <video> element (currentTime back to 0)
+//   - replaces the .voice-dur span (visual timer back to 0:00, even though
+//     the JS Audio object keeps its real currentTime)
+// We skip the reload entirely if anything is *playing* (don't disrupt active
+// playback). For *paused* media we capture playback positions before the
+// wipe and restore them after.
 async function reloadCurrentChatMessages() {
   if (!currentChatId) return;
   const box = document.getElementById('messages');
-  // Skip if a voice note is playing — currentAudio is a JS Audio object that
-  // survives DOM wipes, but the visual timer span gets replaced.
+
+  // 1. Hard-skip while playing
   if (currentAudio && !currentAudio.paused) return;
-  // Skip if any inline <video> is playing.
   for (const v of box.querySelectorAll('video')) {
     if (!v.paused) return;
   }
+
+  // 2. Capture paused-but-mid-playback video positions (by id)
+  const videoStates = new Map();
+  for (const v of box.querySelectorAll('video[id]')) {
+    if (v.currentTime > 0 && !v.ended) videoStates.set(v.id, v.currentTime);
+  }
+
+  // 3. Reload + restore scroll
   const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
   const oldScrollTop  = box.scrollTop;
   await loadMessages(currentChatId, false);
   box.scrollTop = wasNearBottom ? box.scrollHeight : oldScrollTop;
+
+  // 4. Restore video positions on the freshly-rendered <video> elements.
+  // Setting currentTime before metadata loads is queued by the browser, but
+  // some implementations are flaky — fall back to a loadedmetadata listener.
+  for (const [id, time] of videoStates) {
+    const v = document.getElementById(id);
+    if (!v) continue;
+    if (v.readyState >= 1) v.currentTime = time;
+    else v.addEventListener('loadedmetadata', () => { v.currentTime = time; }, { once: true });
+  }
+
+  // 5. Repaint the voice-note timer if a paused Audio is still loaded —
+  // its currentTime survived in the JS object but the span shows 0:00.
+  if (currentAudio && currentAudioId && currentAudio.currentTime > 0) {
+    const dur = document.querySelector(`#${currentAudioId} .voice-dur`);
+    if (dur) {
+      const t = currentAudio.currentTime;
+      const m = Math.floor(t / 60);
+      const s = Math.floor(t % 60).toString().padStart(2, '0');
+      dur.textContent = `${m}:${s}`;
+    }
+  }
 }
 
 function renderMessages() {
@@ -1609,9 +1639,10 @@ function renderVideo(m) {
   if (!m.media_file) return `<div class="bubble">🎬 Video (not downloaded)</div>`;
   // Use direct URL — videos rely on Range requests for streaming/seeking
   const directUrl = `${API}/media/${encodeURIComponent(m.media_file)}?key=${encodeURIComponent(apiKey)}`;
+  // id lets reloadCurrentChatMessages restore currentTime after a DOM wipe
   return `
     <div class="img-bubble">
-      <video controls preload="metadata" style="width:100%;max-height:200px;display:block" src="${directUrl}"></video>
+      <video id="vid-${m.id}" controls preload="metadata" style="width:100%;max-height:200px;display:block" src="${directUrl}"></video>
       <div class="img-meta">🎬 ${esc(m.filename || 'Video')}</div>
     </div>`;
 }
