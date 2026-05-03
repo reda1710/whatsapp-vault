@@ -36,7 +36,13 @@ const app = express();
 // For local dev on a different port, change to cors({ origin: 'http://localhost:PORT' })
 app.use(cors({ origin: false }));
 app.use(express.json({ limit: '100mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    // No build step / asset hashing — disable the browser cache for our
+    // HTML/CSS/JS so deploys don't strand users on stale code.
+    if (/\.(html|css|js)$/.test(filePath)) res.setHeader('Cache-Control', 'no-store');
+  }
+}));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 app.use('/api', (req, res, next) => {
@@ -323,6 +329,6 @@ app.delete('/api/chats/:chatId', (req, res) => {
 });
 
 // ── SPA fallback ──────────────────────────────────────────────────────────────
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 
 app.listen(PORT, '0.0.0.0', () => console.log(`\n🌐 Dashboard: http://0.0.0.0:${PORT}\n`));
