@@ -1134,7 +1134,8 @@
     /* Extra bottom padding so the latest message clears the home indicator
        / browser chrome when snapped to the bottom. */
     .messages { padding: 16px 14px 100px; }
-    .chat-list { padding-bottom: 100px; }
+    .chat-list      { padding-bottom: 100px; }
+    .search-results { padding-bottom: 100px; overflow-y: auto; }
     .filter-bar  { padding: 8px 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .filter-bar::-webkit-scrollbar { display: none; }
     .filter-btn  { white-space: nowrap; }
@@ -1177,9 +1178,9 @@
     WhatsApp Vault
   </div>
 
-  <div class="search-wrap">
+  <div class="search-wrap"><input type="password" name="fake-password" id="autofill-decoy" autocomplete="off" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none">
     <span class="search-icon">⌕</span>
-    <input type="search" name="search" id="search-input" placeholder="Search messages..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-form-type="search" oninput="handleSearch(this.value)">
+    <input type="search" name="search" id="search-input" placeholder="Search messages..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-form-type="search" readonly onfocus="this.removeAttribute(&#39;readonly&#39;)" oninput="handleSearch(this.value)">
   </div>
 
   <div class="dot-live" id="dot-live" title="Bot connection status" style="display:none"></div>
