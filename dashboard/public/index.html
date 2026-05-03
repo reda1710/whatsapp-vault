@@ -1134,6 +1134,7 @@
     /* Extra bottom padding so the latest message clears the home indicator
        / browser chrome when snapped to the bottom. */
     .messages { padding: 16px 14px 100px; }
+    .chat-list { padding-bottom: 100px; }
     .filter-bar  { padding: 8px 14px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .filter-bar::-webkit-scrollbar { display: none; }
     .filter-btn  { white-space: nowrap; }
@@ -1178,7 +1179,7 @@
 
   <div class="search-wrap">
     <span class="search-icon">⌕</span>
-    <input type="text" id="search-input" placeholder="Search messages..." autocomplete="off" data-1p-ignore data-lpignore="true" oninput="handleSearch(this.value)">
+    <input type="search" name="search" id="search-input" placeholder="Search messages..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-form-type="search" oninput="handleSearch(this.value)">
   </div>
 
   <div class="dot-live" id="dot-live" title="Bot connection status" style="display:none"></div>
@@ -1890,9 +1891,15 @@ function handleSearch(q) {
   if (!q.trim() || !currentUserId) {
     panel.classList.remove('open');
     msgs.style.display = 'flex';
+    // On mobile: drop the chat-open body class if no chat was open before
+    // searching, so the user lands back on the chat list.
+    if (!currentChatId) document.body.classList.remove('chat-open');
     return;
   }
 
+  // On mobile the chat-area (and its child .search-results) is hidden until
+  // body.chat-open is set. Flip it on so the results panel is visible.
+  document.body.classList.add('chat-open');
   msgs.style.display = 'none';
   panel.classList.add('open');
   panel.innerHTML = `<div class="empty-list"><div class="spinner"></div><span>Searching...</span></div>`;
