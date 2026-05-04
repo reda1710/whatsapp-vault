@@ -887,7 +887,7 @@
   .profile-pic-wrap {
     width: 128px;
     height: 128px;
-    margin: 4px auto 16px;
+    margin: 16px auto 16px;
     border-radius: 50%;
     overflow: hidden;
     background: var(--border2);
