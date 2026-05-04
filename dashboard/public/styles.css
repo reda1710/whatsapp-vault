@@ -1,3 +1,4 @@
+  
   :root {
     --bg:       #0e0f11;
     --surface:  #16181c;
@@ -1078,15 +1079,15 @@
   .profile-back-btn {
     position: absolute;
     top: 12px;
-    left: 14px;
     background: transparent;
     border: none;
     color: var(--muted);
     font-family: var(--mono);
     font-size: 11px;
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 5px 10px;
     border-radius: 6px;
+    margin-right: 25px;
     transition: background .12s, color .12s;
   }
   .profile-back-btn:hover { background: var(--panel); color: var(--text); }
@@ -1384,7 +1385,10 @@
       border-radius: 0; padding: 60px 20px 24px;
       overflow-y: auto;
     }
-    .profile-pic-wrap { width: 144px; height: 144px; }
+    .profile-pic-wrap { 
+      width: 144px; height: 144px; 
+      margin-top: 40px;
+    }
 
     /* Reconnect banner stacks if cramped */
     .reconnect-banner { flex-wrap: wrap; gap: 6px; padding: 8px 12px; font-size: 11px; }
