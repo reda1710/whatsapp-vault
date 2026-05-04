@@ -1401,8 +1401,12 @@ function parseParticipants(json) {
 // would mislead — return a placeholder instead).
 function formatPhone(number, fallbackId) {
   if (number) return '+' + String(number).replace(/^\+/, '');
-  const id = String(fallbackId || '');
-  if (id.endsWith('@c.us')) return '+' + id.split('@')[0];
+  const id  = String(fallbackId || '');
+  const user = id.split('@')[0].split(':')[0];
+  // For @c.us IDs the user-part is always the phone number. For @lid IDs it's
+  // WhatsApp's internal privacy number — still numeric and unique per contact,
+  // so showing it is more useful than a blank dash.
+  if (/^\d+$/.test(user) && user.length >= 7) return '+' + user;
   return '—';
 }
 

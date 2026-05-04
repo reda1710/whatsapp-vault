@@ -469,7 +469,13 @@ class Session extends EventEmitter {
       try {
         const contact = await chat.getContact();
         isBusiness = !!contact?.isBusiness;
-        phone = contact?.number || null;
+        // contact.number is the most reliable source; fall back to
+        // id.user when the contact still has a legacy @c.us id (which
+        // is common even when the chat itself uses the newer @lid format).
+        phone = contact?.number
+          || (contact?.id?.server === 'c.us' ? contact?.id?.user : null)
+          || (chat?.id?.server    === 'c.us' ? chat?.id?.user    : null)
+          || null;
         try { about = await contact.getAbout(); }
         catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getAbout(${chatId}) failed:`, e.message.split('\n')[0]); }
       } catch (e) {
