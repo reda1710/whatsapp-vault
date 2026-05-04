@@ -76,9 +76,11 @@ db.exec(`
     pic_filename  TEXT,
     pic_hash      TEXT,
     name          TEXT,
+    phone         TEXT,
     about         TEXT,
     description   TEXT,
     is_business   INTEGER DEFAULT 0,
+    participants  TEXT,
     fetched_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
   );
 
@@ -91,6 +93,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_profile_versions_chat
     ON chat_profile_versions(user_id, chat_id, fetched_at DESC);
 `);
+
+// Migrations for tables created by earlier versions of this script.
+// SQLite has no `ADD COLUMN IF NOT EXISTS`, so we swallow the duplicate-column
+// error. Idempotent on fresh installs (CREATE TABLE above already has the col).
+function ensureColumn(table, column, type) {
+  try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); }
+  catch (e) { if (!String(e.message || '').includes('duplicate column')) throw e; }
+}
+ensureColumn('chat_profile_versions', 'participants', 'TEXT');
 
 // ── Prepared statements ──────────────────────────────────────────────────────
 const stmts = {
@@ -145,9 +156,9 @@ const stmts = {
 
   insertProfileVersion: db.prepare(`
     INSERT INTO chat_profile_versions
-      (user_id, chat_id, pic_filename, pic_hash, name, about, description, is_business)
+      (user_id, chat_id, pic_filename, pic_hash, name, about, description, is_business, participants)
     VALUES
-      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @about, @description, @is_business)
+      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @about, @description, @is_business, @participants)
   `),
 
   deleteChatProfileHistory: db.prepare(`
@@ -387,19 +398,31 @@ function deleteChat(userId, chatId) {
 // Append-only timeline of contact/group profile snapshots. The session manager
 // downloads the bytes; we hash, dedupe, and persist. If nothing changed since
 // the last snapshot we return the existing row — no new file, no new DB row.
-function saveProfileVersion(userId, chatId, { picBytes, name, about, description, isBusiness }) {
+function saveProfileVersion(userId, chatId, { picBytes, name, about, description, isBusiness, participants }) {
   const picHash = picBytes ? crypto.createHash('sha256').update(picBytes).digest('hex') : null;
 
   const safeChat = String(chatId).replace(/[@.]/g, '_');
   const picFilename = picBytes ? `${userId}_pic_${safeChat}_${picHash.slice(0, 16)}.jpg` : null;
 
+  // Canonicalize participants for stable dedupe — sort by id so a server-side
+  // reordering doesn't trigger a phantom new version.
+  let participantsJson = null;
+  if (Array.isArray(participants)) {
+    const canon = participants
+      .filter(p => p && p.id)
+      .map(p => ({ id: p.id, isAdmin: !!p.isAdmin, isSuperAdmin: !!p.isSuperAdmin }))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    participantsJson = JSON.stringify(canon);
+  }
+
   const latest = stmts.getLatestProfile.get(userId, chatId);
   const same = latest
-    && (latest.pic_hash    || null) === picHash
-    && (latest.name        || null) === (name        || null)
-    && (latest.about       || null) === (about       || null)
-    && (latest.description || null) === (description || null)
-    && !!latest.is_business         === !!isBusiness;
+    && (latest.pic_hash     || null) === picHash
+    && (latest.name         || null) === (name        || null)
+    && (latest.about        || null) === (about       || null)
+    && (latest.description  || null) === (description || null)
+    && !!latest.is_business          === !!isBusiness
+    && (latest.participants || null) === participantsJson;
   if (same) return latest;
 
   if (picBytes && picFilename) {
@@ -407,7 +430,7 @@ function saveProfileVersion(userId, chatId, { picBytes, name, about, description
     if (!fs.existsSync(fp)) fs.writeFileSync(fp, picBytes);
   }
 
-  const result = stmts.insertProfileVersion.run({
+  stmts.insertProfileVersion.run({
     user_id:      userId,
     chat_id:      chatId,
     pic_filename: picFilename,
@@ -416,6 +439,7 @@ function saveProfileVersion(userId, chatId, { picBytes, name, about, description
     about:        about       || null,
     description:  description || null,
     is_business:  isBusiness ? 1 : 0,
+    participants: participantsJson,
   });
   return stmts.getLatestProfile.get(userId, chatId);
 }

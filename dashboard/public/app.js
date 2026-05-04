@@ -1278,11 +1278,25 @@ function closeProfileModal() {
   profileModalChatId = null;
 }
 
+function parseParticipants(json) {
+  if (!json) return null;
+  try {
+    const arr = JSON.parse(json);
+    return Array.isArray(arr) ? arr : null;
+  } catch { return null; }
+}
+
+function formatParticipantId(id) {
+  // 1234567890@c.us → +1234567890. Strip both old and new lid formats.
+  return '+' + String(id || '').split('@')[0].split(':')[0];
+}
+
 function paintProfile(p) {
   const chatId = profileModalChatId || '';
   const isGroup = chatId.endsWith('@g.us');
   const headerName = document.getElementById('chat-name')?.textContent || '';
   const name = (p && p.name) || headerName || chatId.split('@')[0] || '?';
+  const participants = parseParticipants(p?.participants);
 
   // Big picture
   const picBox = document.getElementById('profile-pic-large');
@@ -1300,19 +1314,29 @@ function paintProfile(p) {
 
   let sub = '';
   if (isGroup) {
-    sub = 'Group';
+    sub = participants ? `Group · ${participants.length} members` : 'Group';
   } else if (chatId) {
-    sub = '+' + chatId.split('@')[0];
+    sub = formatParticipantId(chatId);
   }
   if (p && p.is_business) sub += sub ? ' · 🟢 Business' : '🟢 Business';
   document.getElementById('profile-sub').textContent = sub;
 
   const rows = [];
-  if (p && p.about)       rows.push(['About',        p.about]);
-  if (p && p.description) rows.push(['Description',  p.description]);
-  if (p && p.fetched_at)  rows.push(['Last checked', fmtFull(p.fetched_at)]);
+  if (p && p.about)       rows.push(['About',        esc(p.about)]);
+  if (p && p.description) rows.push(['Description',  esc(p.description)]);
+  if (isGroup && participants) {
+    const items = participants.map(m => {
+      const tag = m.isSuperAdmin ? ' <span class="participant-tag">owner</span>'
+                : m.isAdmin      ? ' <span class="participant-tag">admin</span>'
+                : '';
+      return `<div class="participant">${esc(formatParticipantId(m.id))}${tag}</div>`;
+    }).join('');
+    rows.push(['Members', `<div class="participant-list">${items}</div>`]);
+  }
+  if (p && p.fetched_at)  rows.push(['Last checked', esc(fmtFull(p.fetched_at))]);
+
   document.getElementById('profile-fields').innerHTML = rows.length
-    ? rows.map(([k, v]) => `<div class="profile-field"><div class="profile-field-key">${esc(k)}</div><div class="profile-field-val">${esc(v)}</div></div>`).join('')
+    ? rows.map(([k, v]) => `<div class="profile-field"><div class="profile-field-key">${esc(k)}</div><div class="profile-field-val">${v}</div></div>`).join('')
     : '<div class="profile-field profile-field-empty">No additional info available.</div>';
 }
 
@@ -1365,6 +1389,8 @@ function renderHistoryRow(v) {
   if (v.about)       fields.push(`<span class="history-field">About: ${esc(v.about)}</span>`);
   if (v.description) fields.push(`<span class="history-field">Desc: ${esc(v.description)}</span>`);
   if (v.is_business) fields.push(`<span class="history-field">Business</span>`);
+  const parts = parseParticipants(v.participants);
+  if (parts) fields.push(`<span class="history-field">${parts.length} members</span>`);
   if (!v.pic_filename) fields.push(`<span class="history-field history-field-muted">no picture</span>`);
 
   return `<div class="history-row">

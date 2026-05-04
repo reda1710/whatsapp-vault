@@ -441,9 +441,17 @@ class Session extends EventEmitter {
     try { picUrl = await this.client.getProfilePicUrl(chatId); }
     catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getProfilePicUrl(${chatId}) failed:`, e.message.split('\n')[0]); }
 
-    let about = null, description = null, isBusiness = false;
+    let about = null, description = null, isBusiness = false, participants = null;
     if (chat.isGroup) {
       description = chat.description || chat.groupMetadata?.desc || null;
+      const raw = chat.participants || chat.groupMetadata?.participants;
+      if (Array.isArray(raw)) {
+        participants = raw.map(p => ({
+          id:           p?.id?._serialized || (typeof p?.id === 'string' ? p.id : null),
+          isAdmin:      !!p?.isAdmin,
+          isSuperAdmin: !!p?.isSuperAdmin,
+        })).filter(p => p.id);
+      }
     } else {
       try {
         const contact = await chat.getContact();
@@ -467,6 +475,7 @@ class Session extends EventEmitter {
       about,
       description,
       isBusiness,
+      participants,
     });
   }
 

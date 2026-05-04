@@ -954,6 +954,36 @@
     font-style: italic;
     border-style: dashed;
   }
+  .participant-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    margin: -2px 0;
+  }
+  .participant {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .participant:last-child { border-bottom: none; }
+  .participant-tag {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(37, 211, 102, 0.12);
+    border: 1px solid rgba(37, 211, 102, 0.3);
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
   .profile-history-toggle {
     text-align: center;
     margin-bottom: 8px;
@@ -967,6 +997,10 @@
     border-top: 1px solid var(--border);
     padding-top: 10px;
   }
+  /* Author display:flex above outranks the UA [hidden]→display:none rule, so
+     state it explicitly. Without this, toggling .hidden flips the button label
+     but the panel stays open. */
+  .profile-history[hidden] { display: none; }
   .history-row {
     display: flex;
     align-items: flex-start;
