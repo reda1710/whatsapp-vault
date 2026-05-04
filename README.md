@@ -29,6 +29,7 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 - [Built with](#built-with)
 - [Roadmap](#roadmap)
 - [FAQ](#faq)
+- [Disclaimer](#disclaimer)
 - [License](#license)
 
 ---
@@ -52,7 +53,19 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 
 ## Screenshots
 
-> Add screenshots here once available — `docs/screenshots/dashboard.png`, `docs/screenshots/qr-modal.png`, etc.
+<table>
+  <tr>
+    <td valign="top">
+      <img src="docs/screenshots/qr-modal.png" alt="QR modal" /><br>
+      <img src="docs/screenshots/dashboard.png" alt="Dashboard"/>
+    </td>
+    <td valign="top">
+      <img src="docs/screenshots/mobile.png" alt="Mobile" width="600" /><br>
+      <img src="docs/screenshots/multi-user.png" alt="Multi user"/>
+    </td>
+  </tr>
+</table>
+
 
 ---
 
@@ -62,7 +75,6 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 - **Google Chrome or Chromium** installed system-wide
 - **Linux** (Ubuntu/Debian recommended; tested on Ubuntu 22.04 / 24.04)
 - **2 GB RAM**, or 1 GB RAM + 2 GB swap if running on a small VM
-- A WhatsApp account on a phone (the source of messages)
 
 ---
 
@@ -70,18 +82,17 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 
 ```bash
 # 1. Get the code
-git clone <this-repo> whatsapp-vault
+git clone https://github.com/reda1710/whatsapp-vault.git
+# (or with SSH: git clone git@github.com:reda1710/whatsapp-vault.git)
 cd whatsapp-vault
 npm install
 
 # 2. Generate an API key
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
-# 3. Create .env in the project root
-cat > .env <<EOF
-PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
-DASHBOARD_API_KEY=<paste your generated key>
-EOF
+# 3. Create .env from the template and paste the key in
+cp .env.example .env
+nano .env   # set DASHBOARD_API_KEY (and PORT if 3001 is taken)
 
 # 4. Start with PM2
 npm install -g pm2
@@ -126,12 +137,14 @@ free -h    # verify Swap shows 2.0G
 
 ### Open the dashboard port
 
+Replace `3001` below with whatever you set as `PORT` in `.env`.
+
 ```bash
 sudo iptables -I INPUT -p tcp --dport 3001 -j ACCEPT
 sudo netfilter-persistent save
 ```
 
-If you're behind a cloud firewall (Oracle Cloud, AWS, GCP), also add an ingress rule for TCP/3001 in your VPC/security list.
+If you're behind a cloud firewall (Oracle Cloud, AWS, GCP), also add an ingress rule for the same TCP port in your VPC/security list.
 
 ### Run it
 
@@ -162,8 +175,8 @@ The account's real name and phone number are pulled from WhatsApp once linked. R
 
 | Element | What it does |
 |---|---|
-| **User dropdown** (top-right) | Switch between linked accounts. Status dot: 🟢 online · 🟡 authenticated · 🔴 awaiting QR · ⚪ offline |
-| **Search box** | Full-text search across the selected user's messages (limit 100 results) |
+| **User dropdown** (top-right) | Switch between linked accounts.<br>Status dot: 🟢 online · 🟡 authenticated · 🔴 awaiting QR · ⚪ offline |
+| **Search box** | Full-text search across the selected user's messages |
 | **Filter pills** | Filter by message type (All, Voice, Photos, Videos, Stickers, etc.) |
 | **Hover a chat** | `✕` button to delete the entire conversation |
 | **Hover a message** | `🗑` button to delete that single message |
@@ -177,7 +190,9 @@ The account's real name and phone number are pulled from WhatsApp once linked. R
 
 The chat list auto-refreshes every 10 seconds. Live messages stream in via Server-Sent Events.
 
-On first load the dashboard shows a login overlay — paste your API key once and it's kept in `sessionStorage` (cleared when you close the tab). Press **Logout** in the user menu to drop the key.
+On first load the dashboard shows a login overlay — paste your API key once and it's kept in `sessionStorage` (cleared when you close the tab). 
+
+Press `✕` in the user menu to log the user out.
 
 Below 768 px, the layout switches to a single-pane chat view with a back button, the stats bar collapses into a topbar popover, and the QR modal goes full-screen.
 
@@ -197,7 +212,7 @@ Code-level constants you can tune in `bot/session-manager.js`:
 
 | Constant | Default | Purpose |
 |---|---|---|
-| `QR_TIMEOUT` | 5 min | Stop Chrome if QR is never scanned (session goes idle until Reconnect) |
+| `QR_TIMEOUT` | 5 min | Stop Chrome if QR is never scanned (session gets killed and modal closes) |
 | `READY_TIMEOUT` | 160 s | Restart if WhatsApp Web doesn't load after authentication |
 | `RECONNECT_DELAY` | 8 s | Pause between failed start and the next attempt |
 | `HEARTBEAT_MS` | 30 s | (in `database.js`) Bot status heartbeat written to SQLite |
@@ -247,11 +262,17 @@ whatsapp-vault/
 │   └── database.js          # SQLite schema + prepared statements
 ├── dashboard/
 │   ├── server.js            # Express API + SSE + media streaming
-│   └── public/index.html    # Dashboard UI (single self-contained file)
+│   └── public/
+│       ├── index.html       # Dashboard markup
+│       ├── styles.css       # Dashboard styles
+│       └── app.js           # Dashboard client logic
+├── docs/
+│   └── screenshots/         # README screenshots
 ├── ecosystem.config.js      # PM2 config (parses .env manually)
 ├── migrate-bin-files.js     # Optional one-shot media-rename utility
 ├── update.sh                # Helper: pm2 stop → git pull → npm install → restart
 ├── package.json
+├── .env.example             # Sample env file (safe to commit)
 ├── .env                     # Your secrets (never commit)
 └── .gitignore
 ```
@@ -266,15 +287,15 @@ Generated at runtime:
 
 ## How it works
 
-**Capturing messages** — Each linked account runs a headless Chrome instance via `whatsapp-web.js`. When a message arrives, the bot downloads any attached media (with retry on failure for large files), persists everything to SQLite in a single transaction, and writes the media to disk only after the DB commit succeeds. This avoids orphaned files on crash.
+**Capturing messages** — Each linked account runs a headless Chrome instance via `whatsapp-web.js`. When a message arrives, the bot downloads any attached media (with retry on failure), persists everything to SQLite in a single transaction, and writes the media to disk only after the DB commit succeeds. This avoids orphaned files on crash.
 
-**Late media** — Newly-sent stickers and freshly-captured photos sometimes hit WhatsApp's CDN a few seconds after the message event. If the initial download returns nothing, the message is queued for delayed retry at 3s/8s/20s and patched into the existing DB row when the file is finally available. Bursts of stickers are processed sequentially to avoid overwhelming the WhatsApp bridge.
+**Late media** — Newly-sent stickers and freshly-captured photos sometimes hit WhatsApp's CDN a few seconds after the message event. If the initial download returns nothing, the message is queued for delayed retry at 3s/8s/20s and patched into the existing DB row when the file is finally available. Bursts of stickers or photos are processed sequentially to avoid overwhelming the WhatsApp bridge.
 
 **Real-time UI** — The dashboard uses Server-Sent Events (`/api/events`) to receive `qr`, `ready`, `status`, and `message` events as they happen. Toasts appear instantly when any account receives a message.
 
-**Resilience** — Sessions handle transient WhatsApp Web errors (`Session closed`, `Target closed`, etc.) without flapping, and recover gracefully from Chrome OOM kills (with a longer cooldown so the kernel can reclaim memory). When a session disconnects or QR times out it goes "lazy" — Chrome is fully torn down and the dropdown shows a red dot until the user clicks **Reconnect**, so idle accounts don't burn RAM.
+**Resilience** — Sessions handle transient WhatsApp Web errors (`Session closed`, `Target closed`, etc.) without flapping, and recover gracefully from Chrome OOM kills (with a longer cooldown so the kernel can reclaim memory). When a session disconnects or QR generation times out it goes "lazy" — Chrome is fully torn down and the user status shows a red dot until the user clicks **Reconnect**, so idle accounts don't burn RAM.
 
-**Single-process design** — Bot and dashboard share one Node process and one `SessionManager` instance. PM2 with two separate apps would create two managers fighting over the same Chrome session folders, and the dashboard would never see bot events because they'd live in different processes.
+**Single-process design** — Bot and dashboard share one Node process and one `SessionManager` instance. PM2 with two separate apps would create two managers fighting over the same Chrome session folders.
 
 **Multi-tenancy** — Every database row is scoped by `user_id` with cascading foreign keys. Deleting a user removes all their messages, chats, and media in one transaction. Each user has its own Chrome session folder, so accounts can never see each other's data.
 
@@ -446,10 +467,10 @@ WhatsApp's terms permit linked devices for personal use. Behaviour-wise, this ac
 No, only messages received while the bot is running. WhatsApp Linked Devices doesn't expose backfill of old messages.
 
 **Can I run it on a Raspberry Pi?**
-A Pi 4 with 4 GB works well. Pi 3 will struggle because of Chrome's memory footprint.
+A Pi with more than 2 GB of RAM works well.
 
 **Multiple users on the same machine?**
-Yes — that's the core feature. Add as many accounts as RAM permits. Budget ~300 MB per account for Chrome.
+Yes — that's the core feature. Add as many accounts as RAM permits. Budget ~400 MB per account for Chrome.
 
 **Where are my media files stored?**
 In `media/` next to `vault.db`. Filenames are `<userId>_<waMessageId>.<ext>`.
@@ -458,7 +479,11 @@ In `media/` next to `vault.db`. Filenames are `<userId>_<waMessageId>.<ext>`.
 Pure text is tiny — millions of messages fit in under 1 GB. Media dominates disk usage; the 100 MB per-file cap stops single videos from filling your disk silently.
 
 ---
+## Disclaimer
 
+This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or its affiliates. The official WhatsApp website can be found at [whatsapp.com](https://whatsapp.com). "WhatsApp" as well as related names, marks, emblems and images are registered trademarks of their respective owners. Also it is not guaranteed you will not be blocked by using this tool. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.
+
+---
 ## License
 
-Personal-use project. Not affiliated with WhatsApp or Meta. Use responsibly.
+Personal-use project. Use responsibly.
