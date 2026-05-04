@@ -1042,6 +1042,55 @@
     margin-top: 4px;
   }
 
+  /* History: clickable date-only rows */
+  .history-date-item {
+    padding: 9px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--subtle);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .history-date-item:hover { background: var(--panel); color: var(--text); }
+
+  /* Member list: clickable buttons */
+  .member-btn {
+    width: 100%;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px dashed var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: color .12s;
+  }
+  .member-btn:last-child { border-bottom: none; }
+  .member-btn:hover { color: var(--accent); }
+
+  /* Back navigation button (top-left of modal, hidden by default) */
+  .profile-back-btn {
+    position: absolute;
+    top: 12px;
+    left: 14px;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background .12s, color .12s;
+  }
+  .profile-back-btn:hover { background: var(--panel); color: var(--text); }
+
 
   /* ── Login overlay ───────────────────────────────── */
   .login-overlay {

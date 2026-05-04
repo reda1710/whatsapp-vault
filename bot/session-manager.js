@@ -441,21 +441,35 @@ class Session extends EventEmitter {
     try { picUrl = await this.client.getProfilePicUrl(chatId); }
     catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getProfilePicUrl(${chatId}) failed:`, e.message.split('\n')[0]); }
 
-    let about = null, description = null, isBusiness = false, participants = null;
+    let about = null, description = null, isBusiness = false, phone = null, participants = null;
     if (chat.isGroup) {
       description = chat.description || chat.groupMetadata?.desc || null;
       const raw = chat.participants || chat.groupMetadata?.participants;
       if (Array.isArray(raw)) {
-        participants = raw.map(p => ({
+        const base = raw.map(p => ({
           id:           p?.id?._serialized || (typeof p?.id === 'string' ? p.id : null),
           isAdmin:      !!p?.isAdmin,
           isSuperAdmin: !!p?.isSuperAdmin,
         })).filter(p => p.id);
+
+        // Resolve the real E.164 phone for each participant. Required because
+        // WhatsApp Web increasingly hands out @lid ids whose user-part is NOT
+        // the phone number — only Contact.number gives the real one. These
+        // are local-store lookups, so parallel fan-out is fine.
+        participants = await Promise.all(base.map(async p => {
+          let number = null;
+          try {
+            const c = await this.client.getContactById(p.id);
+            number = c?.number || null;
+          } catch {/* contact not in store yet — leave null */}
+          return { ...p, number };
+        }));
       }
     } else {
       try {
         const contact = await chat.getContact();
         isBusiness = !!contact?.isBusiness;
+        phone = contact?.number || null;
         try { about = await contact.getAbout(); }
         catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getAbout(${chatId}) failed:`, e.message.split('\n')[0]); }
       } catch (e) {
@@ -472,6 +486,7 @@ class Session extends EventEmitter {
     return db.saveProfileVersion(this.userId, chatId, {
       picBytes,
       name: chat.name || null,
+      phone,
       about,
       description,
       isBusiness,

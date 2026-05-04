@@ -155,6 +155,7 @@
 <!-- Profile modal -->
 <div class="modal-overlay" id="profile-modal" onclick="if(event.target===this)closeProfileModal()">
   <div class="modal profile-modal-body">
+    <button class="profile-back-btn" id="profile-back-btn" onclick="profileModalBack()" hidden>← Back</button>
     <button class="profile-close" onclick="closeProfileModal()" aria-label="Close">✕</button>
     <div class="profile-pic-wrap" id="profile-pic-large"></div>
     <h3 class="profile-name" id="profile-name"></h3>

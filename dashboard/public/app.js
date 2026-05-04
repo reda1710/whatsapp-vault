@@ -1228,54 +1228,163 @@ function connectSSE() {
 }
 
 // ── Profile modal ─────────────────────────────────────────────────────────
-let profileModalChatId = null;
+let profileModalChatId   = null;
+let currentLatestProfile = null; // live snapshot — "← Latest" returns here
+let viewingSnapshot      = false;
+let profileNavStack      = [];   // member drill-down breadcrumbs
+let historyRows          = [];   // cached version list while history panel is open
+
+function showProfileBackBtn(label) {
+  const btn = document.getElementById('profile-back-btn');
+  btn.textContent = label;
+  btn.hidden = false;
+}
+function hideProfileBackBtn() {
+  document.getElementById('profile-back-btn').hidden = true;
+}
+
+function _resetHistoryPanel() {
+  document.getElementById('profile-history').innerHTML   = '';
+  document.getElementById('profile-history').hidden      = true;
+  document.getElementById('profile-history-btn').textContent = 'Show history';
+  historyRows = [];
+}
 
 async function openProfileModal(chatId) {
   if (!chatId) return;
-  profileModalChatId = chatId;
+  profileModalChatId   = chatId;
+  currentLatestProfile = null;
+  viewingSnapshot      = false;
+  profileNavStack      = [];
+  historyRows          = [];
+  hideProfileBackBtn();
 
-  const modal = document.getElementById('profile-modal');
   document.getElementById('profile-pic-large').innerHTML = '';
   document.getElementById('profile-name').textContent    = '';
   document.getElementById('profile-sub').textContent     = '';
   document.getElementById('profile-fields').innerHTML    = '<div class="empty"><div class="spinner"></div></div>';
-  document.getElementById('profile-history').innerHTML   = '';
-  document.getElementById('profile-history').hidden      = true;
-  document.getElementById('profile-history-btn').textContent = 'Show history';
-  modal.classList.add('open');
+  _resetHistoryPanel();
+  document.getElementById('profile-modal').classList.add('open');
 
-  // 1. Paint whatever we already have stored — instant, no network.
+  // 1. Paint what we already have — instant.
   let cached = null;
   try {
     const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/profile?userId=${currentUserId}`);
     cached = await r.json();
+    currentLatestProfile = cached;
     paintProfile(cached);
   } catch {
     document.getElementById('profile-fields').innerHTML = '<div class="empty"><h3>Failed to load profile</h3></div>';
   }
 
-  // 2. Ask WhatsApp for the latest. The endpoint dedupes — if nothing changed,
-  //    no new row, no new file. If it differs, we get a fresh row to paint.
-  if (profileModalChatId !== chatId) return; // user moved on
+  // 2. Background refresh — dedupes server-side, updates if something changed.
+  if (profileModalChatId !== chatId) return;
   try {
     const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/profile/refresh?userId=${currentUserId}`, { method: 'POST' });
     if (!r.ok) return;
     const fresh = await r.json();
     if (profileModalChatId !== chatId) return;
     if (fresh && (!cached || fresh.id !== cached.id)) {
-      paintProfile(fresh);
-      // Mirror the new pic in the chat header so it's not stale behind the modal
+      currentLatestProfile = fresh;
+      if (!viewingSnapshot) paintProfile(fresh);
       if (chatId === currentChatId) {
         const headerName = document.getElementById('chat-name')?.textContent || fresh.name || '?';
         setHeaderAvatar(headerName, fresh.pic_filename);
       }
     }
-  } catch {/* session offline or transient — leave the cached view */}
+  } catch {/* session offline — leave cached view */}
 }
 
 function closeProfileModal() {
   document.getElementById('profile-modal').classList.remove('open');
-  profileModalChatId = null;
+  profileModalChatId   = null;
+  currentLatestProfile = null;
+  viewingSnapshot      = false;
+  profileNavStack      = [];
+  historyRows          = [];
+  hideProfileBackBtn();
+}
+
+// ── Member drill-down ──────────────────────────────────────────────────────
+async function openMemberProfile(memberId) {
+  // Push current view onto the breadcrumb stack.
+  profileNavStack.push({
+    chatId:    profileModalChatId,
+    profile:   currentLatestProfile,
+    backLabel: document.getElementById('profile-name').textContent || 'Back',
+  });
+
+  profileModalChatId   = memberId;
+  viewingSnapshot      = false;
+  currentLatestProfile = null;
+  showProfileBackBtn(`← ${profileNavStack[profileNavStack.length - 1].backLabel}`);
+
+  document.getElementById('profile-pic-large').innerHTML = '';
+  document.getElementById('profile-name').textContent    = '';
+  document.getElementById('profile-sub').textContent     = '';
+  document.getElementById('profile-fields').innerHTML    = '<div class="empty"><div class="spinner"></div></div>';
+  _resetHistoryPanel();
+
+  // 1. Paint cached snapshot (may be null for contacts we haven't visited).
+  let cached = null;
+  try {
+    const r = await apiFetch(`${API}/chats/${encodeURIComponent(memberId)}/profile?userId=${currentUserId}`);
+    cached = await r.json();
+    currentLatestProfile = cached;
+    paintProfile(cached);
+  } catch {}
+
+  // 2. Background refresh pulls pic, about, phone from WhatsApp.
+  if (profileModalChatId !== memberId) return;
+  try {
+    const r = await apiFetch(`${API}/chats/${encodeURIComponent(memberId)}/profile/refresh?userId=${currentUserId}`, { method: 'POST' });
+    if (!r.ok) return;
+    const fresh = await r.json();
+    if (profileModalChatId !== memberId) return;
+    if (fresh && (!cached || fresh.id !== cached.id)) {
+      currentLatestProfile = fresh;
+      if (!viewingSnapshot) paintProfile(fresh);
+    }
+  } catch {}
+}
+
+// ── History snapshot navigation ────────────────────────────────────────────
+function viewHistorySnapshot(idx) {
+  const v = historyRows[idx];
+  if (!v) return;
+  viewingSnapshot = true;
+  showProfileBackBtn('← Latest');
+  paintProfile(v);
+  document.getElementById('profile-history').hidden      = true;
+  document.getElementById('profile-history-btn').textContent = 'Show history';
+}
+
+function viewLatestProfile() {
+  viewingSnapshot = false;
+  if (profileNavStack.length > 0) {
+    showProfileBackBtn(`← ${profileNavStack[profileNavStack.length - 1].backLabel}`);
+  } else {
+    hideProfileBackBtn();
+  }
+  paintProfile(currentLatestProfile);
+}
+
+// ── Back button ────────────────────────────────────────────────────────────
+function profileModalBack() {
+  if (viewingSnapshot) {
+    viewLatestProfile();
+    return;
+  }
+  if (profileNavStack.length === 0) return;
+  const prev = profileNavStack.pop();
+  profileModalChatId   = prev.chatId;
+  currentLatestProfile = prev.profile;
+  viewingSnapshot      = false;
+  _resetHistoryPanel();
+  paintProfile(prev.profile);
+  profileNavStack.length > 0
+    ? showProfileBackBtn(`← ${profileNavStack[profileNavStack.length - 1].backLabel}`)
+    : hideProfileBackBtn();
 }
 
 function parseParticipants(json) {
@@ -1286,9 +1395,15 @@ function parseParticipants(json) {
   } catch { return null; }
 }
 
-function formatParticipantId(id) {
-  // 1234567890@c.us → +1234567890. Strip both old and new lid formats.
-  return '+' + String(id || '').split('@')[0].split(':')[0];
+// Format a phone number for display. Prefer the E.164 we resolved server-side
+// via Contact.number; fall back to parsing the raw id, but only when it's a
+// legacy @c.us id (the @lid user-part is NOT a phone number, so showing it
+// would mislead — return a placeholder instead).
+function formatPhone(number, fallbackId) {
+  if (number) return '+' + String(number).replace(/^\+/, '');
+  const id = String(fallbackId || '');
+  if (id.endsWith('@c.us')) return '+' + id.split('@')[0];
+  return '—';
 }
 
 function paintProfile(p) {
@@ -1316,7 +1431,7 @@ function paintProfile(p) {
   if (isGroup) {
     sub = participants ? `Group · ${participants.length} members` : 'Group';
   } else if (chatId) {
-    sub = formatParticipantId(chatId);
+    sub = formatPhone(p?.phone, chatId);
   }
   if (p && p.is_business) sub += sub ? ' · 🟢 Business' : '🟢 Business';
   document.getElementById('profile-sub').textContent = sub;
@@ -1329,7 +1444,7 @@ function paintProfile(p) {
       const tag = m.isSuperAdmin ? ' <span class="participant-tag">owner</span>'
                 : m.isAdmin      ? ' <span class="participant-tag">admin</span>'
                 : '';
-      return `<div class="participant">${esc(formatParticipantId(m.id))}${tag}</div>`;
+      return `<button class="participant member-btn" onclick="openMemberProfile('${escAttr(m.id)}')">${esc(formatPhone(m.number, m.id))}${tag}</button>`;
     }).join('');
     rows.push(['Members', `<div class="participant-list">${items}</div>`]);
   }
@@ -1364,42 +1479,15 @@ async function toggleProfileHistory() {
   btn.textContent = 'Hide history';
   panel.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
   try {
-    const r = await apiFetch(`${API}/chats/${encodeURIComponent(profileModalChatId)}/profile/history?userId=${currentUserId}`);
+    const r    = await apiFetch(`${API}/chats/${encodeURIComponent(profileModalChatId)}/profile/history?userId=${currentUserId}`);
     const rows = await r.json();
+    historyRows = rows; // cache so viewHistorySnapshot can look up by index
     panel.innerHTML = rows.length
-      ? rows.map(renderHistoryRow).join('')
+      ? rows.map((v, i) => `<div class="history-date-item" onclick="viewHistorySnapshot(${i})">${esc(fmtFull(v.fetched_at))}</div>`).join('')
       : '<div class="profile-field profile-field-empty">No version history yet.</div>';
   } catch {
     panel.innerHTML = '<div class="profile-field profile-field-empty">Failed to load history.</div>';
   }
-}
-
-function renderHistoryRow(v) {
-  const name = v.name || '?';
-  const [bg, fg] = avatarColor(name);
-  const thumb = v.pic_filename
-    ? `<img class="history-thumb"
-         src="${API}/media/${encodeURIComponent(v.pic_filename)}?key=${encodeURIComponent(apiKey)}"
-         data-name="${escAttr(name)}"
-         onerror="onAvatarError(this)">`
-    : `<div class="history-thumb" style="background:${bg};color:${fg}">${esc(initials(name))}</div>`;
-
-  const fields = [];
-  if (v.name)        fields.push(`<span class="history-field">${esc(v.name)}</span>`);
-  if (v.about)       fields.push(`<span class="history-field">About: ${esc(v.about)}</span>`);
-  if (v.description) fields.push(`<span class="history-field">Desc: ${esc(v.description)}</span>`);
-  if (v.is_business) fields.push(`<span class="history-field">Business</span>`);
-  const parts = parseParticipants(v.participants);
-  if (parts) fields.push(`<span class="history-field">${parts.length} members</span>`);
-  if (!v.pic_filename) fields.push(`<span class="history-field history-field-muted">no picture</span>`);
-
-  return `<div class="history-row">
-    ${thumb}
-    <div class="history-meta">
-      <div class="history-fields">${fields.length ? fields.join(' · ') : '<span class="history-field-muted">(no info)</span>'}</div>
-      <div class="history-time">${esc(fmtFull(v.fetched_at))}</div>
-    </div>
-  </div>`;
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────

@@ -102,6 +102,7 @@ function ensureColumn(table, column, type) {
   catch (e) { if (!String(e.message || '').includes('duplicate column')) throw e; }
 }
 ensureColumn('chat_profile_versions', 'participants', 'TEXT');
+ensureColumn('chat_profile_versions', 'phone',        'TEXT');
 
 // ── Prepared statements ──────────────────────────────────────────────────────
 const stmts = {
@@ -156,9 +157,9 @@ const stmts = {
 
   insertProfileVersion: db.prepare(`
     INSERT INTO chat_profile_versions
-      (user_id, chat_id, pic_filename, pic_hash, name, about, description, is_business, participants)
+      (user_id, chat_id, pic_filename, pic_hash, name, phone, about, description, is_business, participants)
     VALUES
-      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @about, @description, @is_business, @participants)
+      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @phone, @about, @description, @is_business, @participants)
   `),
 
   deleteChatProfileHistory: db.prepare(`
@@ -398,19 +399,26 @@ function deleteChat(userId, chatId) {
 // Append-only timeline of contact/group profile snapshots. The session manager
 // downloads the bytes; we hash, dedupe, and persist. If nothing changed since
 // the last snapshot we return the existing row — no new file, no new DB row.
-function saveProfileVersion(userId, chatId, { picBytes, name, about, description, isBusiness, participants }) {
+function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, description, isBusiness, participants }) {
   const picHash = picBytes ? crypto.createHash('sha256').update(picBytes).digest('hex') : null;
 
   const safeChat = String(chatId).replace(/[@.]/g, '_');
   const picFilename = picBytes ? `${userId}_pic_${safeChat}_${picHash.slice(0, 16)}.jpg` : null;
 
   // Canonicalize participants for stable dedupe — sort by id so a server-side
-  // reordering doesn't trigger a phantom new version.
+  // reordering doesn't trigger a phantom new version. Each entry carries the
+  // resolved phone number (when available) so privacy-lid ids still display
+  // a real number client-side.
   let participantsJson = null;
   if (Array.isArray(participants)) {
     const canon = participants
       .filter(p => p && p.id)
-      .map(p => ({ id: p.id, isAdmin: !!p.isAdmin, isSuperAdmin: !!p.isSuperAdmin }))
+      .map(p => ({
+        id:           p.id,
+        number:       p.number       || null,
+        isAdmin:      !!p.isAdmin,
+        isSuperAdmin: !!p.isSuperAdmin,
+      }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     participantsJson = JSON.stringify(canon);
   }
@@ -419,6 +427,7 @@ function saveProfileVersion(userId, chatId, { picBytes, name, about, description
   const same = latest
     && (latest.pic_hash     || null) === picHash
     && (latest.name         || null) === (name        || null)
+    && (latest.phone        || null) === (phone       || null)
     && (latest.about        || null) === (about       || null)
     && (latest.description  || null) === (description || null)
     && !!latest.is_business          === !!isBusiness
@@ -436,6 +445,7 @@ function saveProfileVersion(userId, chatId, { picBytes, name, about, description
     pic_filename: picFilename,
     pic_hash:     picHash,
     name:         name        || null,
+    phone:        phone       || null,
     about:        about       || null,
     description:  description || null,
     is_business:  isBusiness ? 1 : 0,
