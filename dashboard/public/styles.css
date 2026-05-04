@@ -1077,8 +1077,6 @@
 
   /* Back navigation button (top-left of modal, hidden by default) */
   .profile-back-btn {
-    position: absolute;
-    top: 12px;
     background: transparent;
     border: none;
     color: var(--muted);
@@ -1387,7 +1385,6 @@
     }
     .profile-pic-wrap { 
       width: 144px; height: 144px; 
-      margin-top: 40px;
     }
 
     /* Reconnect banner stacks if cramped */
