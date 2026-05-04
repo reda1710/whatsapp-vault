@@ -261,9 +261,14 @@ async function loadMessages(chatId, prepend = false, limitOverride) {
     box.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   }
   try {
-    const r    = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?userId=${currentUserId}&limit=${limit}&offset=${loadedCount}`);
-    const page = await r.json();
-    hasMoreMsgs = page.length === limit;
+    // Over-fetch by 1 so we can distinguish "exactly N left" from "N+ left"
+    // without a separate count query. If we got the extra row, drop the
+    // oldest (index 0 in ASC order) and flag hasMore.
+    const r    = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?userId=${currentUserId}&limit=${limit + 1}&offset=${loadedCount}`);
+    let page   = await r.json();
+    const more = page.length > limit;
+    if (more) page = page.slice(1);
+    hasMoreMsgs = more;
     allMessages = prepend ? [...page, ...allMessages] : page;
     loadedCount += page.length;
     renderMessages();

@@ -70,6 +70,7 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_messages_user     ON messages(user_id);
   CREATE INDEX IF NOT EXISTS idx_messages_chat     ON messages(user_id, chat_id);
+  CREATE INDEX IF NOT EXISTS idx_messages_chat_ts  ON messages(user_id, chat_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_messages_ts       ON messages(timestamp);
   CREATE INDEX IF NOT EXISTS idx_messages_type     ON messages(type);
   CREATE INDEX IF NOT EXISTS idx_chats_user        ON chats(user_id);
