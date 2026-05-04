@@ -460,7 +460,15 @@ class Session extends EventEmitter {
           let number = null;
           try {
             const c = await this.client.getContactById(p.id);
-            number = c?.number || null;
+            number = c?.number
+              || (c?.id?.server === 'c.us' ? c?.id?.user : null)
+              || null;
+            if (!number) {
+              try {
+                const fmt = await c.getFormattedNumber();
+                if (fmt) number = fmt.replace(/[\s\-() ]/g, '') || null;
+              } catch {}
+            }
           } catch {/* contact not in store yet — leave null */}
           return { ...p, number };
         }));
@@ -469,13 +477,22 @@ class Session extends EventEmitter {
       try {
         const contact = await chat.getContact();
         isBusiness = !!contact?.isBusiness;
-        // contact.number is the most reliable source; fall back to
-        // id.user when the contact still has a legacy @c.us id (which
-        // is common even when the chat itself uses the newer @lid format).
+        // Try every available source for the real phone number. For @lid
+        // contacts, contact.number is often null because WA hides it;
+        // getFormattedNumber() uses a separate WA API call that resolves it.
         phone = contact?.number
           || (contact?.id?.server === 'c.us' ? contact?.id?.user : null)
           || (chat?.id?.server    === 'c.us' ? chat?.id?.user    : null)
           || null;
+        if (!phone) {
+          try {
+            const fmt = await contact.getFormattedNumber();
+            // Docs: (12345678901@c.us) => "+1 (234) 5678-901"
+            // Strip formatting chars but keep digits and the leading + so we
+            // store a clean E.164 like "+12345678901".
+            if (fmt) phone = fmt.replace(/[\s\-() ]/g, '') || null;
+          } catch { /* not available in this wwebjs build — continue */ }
+        }
         try { about = await contact.getAbout(); }
         catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getAbout(${chatId}) failed:`, e.message.split('\n')[0]); }
       } catch (e) {

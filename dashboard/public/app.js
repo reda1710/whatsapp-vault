@@ -1401,13 +1401,11 @@ function parseParticipants(json) {
 // would mislead — return a placeholder instead).
 function formatPhone(number, fallbackId) {
   if (number) return '+' + String(number).replace(/^\+/, '');
-  const id  = String(fallbackId || '');
-  const user = id.split('@')[0].split(':')[0];
-  // For @c.us IDs the user-part is always the phone number. For @lid IDs it's
-  // WhatsApp's internal privacy number — still numeric and unique per contact,
-  // so showing it is more useful than a blank dash.
-  if (/^\d+$/.test(user) && user.length >= 7) return '+' + user;
-  return '—';
+  const id = String(fallbackId || '');
+  // Only parse the user-part for @c.us ids — those genuinely contain the
+  // phone. @lid user-parts are WhatsApp-internal privacy ids, not phones.
+  if (id.endsWith('@c.us')) return '+' + id.split('@')[0];
+  return null; // caller decides what to show when phone is unavailable
 }
 
 function paintProfile(p) {
@@ -1435,7 +1433,7 @@ function paintProfile(p) {
   if (isGroup) {
     sub = participants ? `Group · ${participants.length} members` : 'Group';
   } else if (chatId) {
-    sub = formatPhone(p?.phone, chatId);
+    sub = formatPhone(p?.phone, chatId) || '';
   }
   if (p && p.is_business) sub += sub ? ' · 🟢 Business' : '🟢 Business';
   document.getElementById('profile-sub').textContent = sub;
