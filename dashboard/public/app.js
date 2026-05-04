@@ -85,6 +85,45 @@ function initials(name) {
   return name.split(/[\s@_-]+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('');
 }
 
+// Render an avatar — real profile pic if we have one, otherwise the colored
+// letter circle. The img falls back to a letter circle if the file is gone.
+function renderAvatar(name, picFilename, extraClass = '') {
+  const safe = name || '?';
+  const [bg, fg] = avatarColor(safe);
+  if (picFilename) {
+    return `<img class="avatar avatar-img ${extraClass}"
+              src="${API}/media/${encodeURIComponent(picFilename)}?key=${encodeURIComponent(apiKey)}"
+              data-name="${escAttr(safe)}"
+              onerror="onAvatarError(this)">`;
+  }
+  return `<div class="avatar ${extraClass}" style="background:${bg};color:${fg}">${initials(safe)}</div>`;
+}
+
+function onAvatarError(img) {
+  const name = img.getAttribute('data-name') || '?';
+  const [bg, fg] = avatarColor(name);
+  const div = document.createElement('div');
+  div.className = (img.className || 'avatar').replace(/\bavatar-img\b/, '').trim();
+  if (img.id) div.id = img.id;
+  div.style.background = bg;
+  div.style.color = fg;
+  div.textContent = initials(name);
+  img.replaceWith(div);
+}
+
+// Replace the chat-header avatar element in place — preserves the #chat-avatar
+// id so subsequent updates (and the inline click handler on the header) keep
+// working regardless of whether the avatar is currently an img or a div.
+function setHeaderAvatar(name, picFilename) {
+  const old = document.getElementById('chat-avatar');
+  if (!old) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = renderAvatar(name, picFilename);
+  const fresh = tmp.firstElementChild;
+  fresh.id = 'chat-avatar';
+  old.replaceWith(fresh);
+}
+
 // ── Time formatting ─────────────────────────────────────────────────────
 function fmtTime(ts) {
   const d = new Date(ts * 1000);
@@ -165,17 +204,17 @@ async function loadChats() {
     }
 
     list.innerHTML = chats.map(c => {
-      const [bg, fg] = avatarColor(c.name || c.chat_id);
-      const ini = initials(c.name || c.chat_id.split('@')[0]);
+      const displayName = c.name || c.chat_id.split('@')[0];
       const preview = previewText(c.last_type, c.last_body);
       const time = c.last_msg_at ? fmtTime(c.last_msg_at) : '';
       const active = c.chat_id === currentChatId ? ' active' : '';
       const groupTag = c.is_group ? `<span class="tag group">group</span>` : '';
+      const pic = c.pic_filename || '';
       return `
-        <div class="chat-item${active}" onclick="selectChat('${escAttr(c.chat_id)}','${escAttr(c.name||c.chat_id)}',${c.is_group},${c.msg_count})">
-          <div class="avatar" style="background:${bg};color:${fg}">${ini}</div>
+        <div class="chat-item${active}" onclick="selectChat('${escAttr(c.chat_id)}','${escAttr(c.name||c.chat_id)}',${c.is_group},${c.msg_count},'${escAttr(pic)}')">
+          ${renderAvatar(displayName, c.pic_filename)}
           <div class="chat-meta">
-            <div class="chat-name">${esc(c.name || c.chat_id.split('@')[0])} ${groupTag}</div>
+            <div class="chat-name">${esc(displayName)} ${groupTag}</div>
             <div class="chat-preview">${preview}</div>
           </div>
           <button class="del-chat-btn" title="Delete conversation" onclick="event.stopPropagation();confirmDeleteChat('${escAttr(c.chat_id)}','${escAttr(c.name||c.chat_id)}')">✕</button>
@@ -198,7 +237,7 @@ function previewText(type, body) {
 }
 
 // ── Select chat ─────────────────────────────────────────────────────────
-async function selectChat(chatId, name, isGroup, count) {
+async function selectChat(chatId, name, isGroup, count, picFilename) {
   currentChatId = chatId;
   currentFilter = 'all';
   loadedCount   = 0;
@@ -208,11 +247,7 @@ async function selectChat(chatId, name, isGroup, count) {
   document.getElementById('filter-bar').style.display = 'flex';
   document.getElementById('search-results').classList.remove('open');
 
-  const [bg, fg] = avatarColor(name);
-  const av = document.getElementById('chat-avatar');
-  av.textContent = initials(name);
-  av.style.background = bg;
-  av.style.color = fg;
+  setHeaderAvatar(name, picFilename || null);
   document.getElementById('chat-name').textContent = name;
   document.getElementById('chat-sub').textContent = `${count} messages`;
 
@@ -1190,6 +1225,155 @@ function connectSSE() {
     // Reconnect after 5s on error
     setTimeout(connectSSE, 5000);
   };
+}
+
+// ── Profile modal ─────────────────────────────────────────────────────────
+let profileModalChatId = null;
+
+async function openProfileModal(chatId) {
+  if (!chatId) return;
+  profileModalChatId = chatId;
+
+  const modal = document.getElementById('profile-modal');
+  document.getElementById('profile-pic-large').innerHTML = '';
+  document.getElementById('profile-name').textContent    = '';
+  document.getElementById('profile-sub').textContent     = '';
+  document.getElementById('profile-fields').innerHTML    = '<div class="empty"><div class="spinner"></div></div>';
+  document.getElementById('profile-history').innerHTML   = '';
+  document.getElementById('profile-history').hidden      = true;
+  document.getElementById('profile-history-btn').textContent = 'Show history';
+  modal.classList.add('open');
+
+  // 1. Paint whatever we already have stored — instant, no network.
+  let cached = null;
+  try {
+    const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/profile?userId=${currentUserId}`);
+    cached = await r.json();
+    paintProfile(cached);
+  } catch {
+    document.getElementById('profile-fields').innerHTML = '<div class="empty"><h3>Failed to load profile</h3></div>';
+  }
+
+  // 2. Ask WhatsApp for the latest. The endpoint dedupes — if nothing changed,
+  //    no new row, no new file. If it differs, we get a fresh row to paint.
+  if (profileModalChatId !== chatId) return; // user moved on
+  try {
+    const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/profile/refresh?userId=${currentUserId}`, { method: 'POST' });
+    if (!r.ok) return;
+    const fresh = await r.json();
+    if (profileModalChatId !== chatId) return;
+    if (fresh && (!cached || fresh.id !== cached.id)) {
+      paintProfile(fresh);
+      // Mirror the new pic in the chat header so it's not stale behind the modal
+      if (chatId === currentChatId) {
+        const headerName = document.getElementById('chat-name')?.textContent || fresh.name || '?';
+        setHeaderAvatar(headerName, fresh.pic_filename);
+      }
+    }
+  } catch {/* session offline or transient — leave the cached view */}
+}
+
+function closeProfileModal() {
+  document.getElementById('profile-modal').classList.remove('open');
+  profileModalChatId = null;
+}
+
+function paintProfile(p) {
+  const chatId = profileModalChatId || '';
+  const isGroup = chatId.endsWith('@g.us');
+  const headerName = document.getElementById('chat-name')?.textContent || '';
+  const name = (p && p.name) || headerName || chatId.split('@')[0] || '?';
+
+  // Big picture
+  const picBox = document.getElementById('profile-pic-large');
+  if (p && p.pic_filename) {
+    picBox.innerHTML = `<img class="profile-pic-img"
+        src="${API}/media/${encodeURIComponent(p.pic_filename)}?key=${encodeURIComponent(apiKey)}"
+        data-name="${escAttr(name)}"
+        onerror="onProfilePicError(this)">`;
+  } else {
+    const [bg, fg] = avatarColor(name);
+    picBox.innerHTML = `<div class="profile-pic-fallback" style="background:${bg};color:${fg}">${esc(initials(name))}</div>`;
+  }
+
+  document.getElementById('profile-name').textContent = name;
+
+  let sub = '';
+  if (isGroup) {
+    sub = 'Group';
+  } else if (chatId) {
+    sub = '+' + chatId.split('@')[0];
+  }
+  if (p && p.is_business) sub += sub ? ' · 🟢 Business' : '🟢 Business';
+  document.getElementById('profile-sub').textContent = sub;
+
+  const rows = [];
+  if (p && p.about)       rows.push(['About',        p.about]);
+  if (p && p.description) rows.push(['Description',  p.description]);
+  if (p && p.fetched_at)  rows.push(['Last checked', fmtFull(p.fetched_at)]);
+  document.getElementById('profile-fields').innerHTML = rows.length
+    ? rows.map(([k, v]) => `<div class="profile-field"><div class="profile-field-key">${esc(k)}</div><div class="profile-field-val">${esc(v)}</div></div>`).join('')
+    : '<div class="profile-field profile-field-empty">No additional info available.</div>';
+}
+
+function onProfilePicError(img) {
+  const name = img.getAttribute('data-name') || '?';
+  const [bg, fg] = avatarColor(name);
+  const div = document.createElement('div');
+  div.className = 'profile-pic-fallback';
+  div.style.background = bg;
+  div.style.color = fg;
+  div.textContent = initials(name);
+  img.replaceWith(div);
+}
+
+async function toggleProfileHistory() {
+  const panel = document.getElementById('profile-history');
+  const btn   = document.getElementById('profile-history-btn');
+  if (!panel.hidden) {
+    panel.hidden = true;
+    btn.textContent = 'Show history';
+    return;
+  }
+  if (!profileModalChatId) return;
+  panel.hidden = false;
+  btn.textContent = 'Hide history';
+  panel.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  try {
+    const r = await apiFetch(`${API}/chats/${encodeURIComponent(profileModalChatId)}/profile/history?userId=${currentUserId}`);
+    const rows = await r.json();
+    panel.innerHTML = rows.length
+      ? rows.map(renderHistoryRow).join('')
+      : '<div class="profile-field profile-field-empty">No version history yet.</div>';
+  } catch {
+    panel.innerHTML = '<div class="profile-field profile-field-empty">Failed to load history.</div>';
+  }
+}
+
+function renderHistoryRow(v) {
+  const name = v.name || '?';
+  const [bg, fg] = avatarColor(name);
+  const thumb = v.pic_filename
+    ? `<img class="history-thumb"
+         src="${API}/media/${encodeURIComponent(v.pic_filename)}?key=${encodeURIComponent(apiKey)}"
+         data-name="${escAttr(name)}"
+         onerror="onAvatarError(this)">`
+    : `<div class="history-thumb" style="background:${bg};color:${fg}">${esc(initials(name))}</div>`;
+
+  const fields = [];
+  if (v.name)        fields.push(`<span class="history-field">${esc(v.name)}</span>`);
+  if (v.about)       fields.push(`<span class="history-field">About: ${esc(v.about)}</span>`);
+  if (v.description) fields.push(`<span class="history-field">Desc: ${esc(v.description)}</span>`);
+  if (v.is_business) fields.push(`<span class="history-field">Business</span>`);
+  if (!v.pic_filename) fields.push(`<span class="history-field history-field-muted">no picture</span>`);
+
+  return `<div class="history-row">
+    ${thumb}
+    <div class="history-meta">
+      <div class="history-fields">${fields.length ? fields.join(' · ') : '<span class="history-field-muted">(no info)</span>'}</div>
+      <div class="history-time">${esc(fmtFull(v.fetched_at))}</div>
+    </div>
+  </div>`;
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────

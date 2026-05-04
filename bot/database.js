@@ -1,6 +1,7 @@
 'use strict';
 
 const Database = require('better-sqlite3');
+const crypto   = require('crypto');
 const path     = require('path');
 const fs       = require('fs');
 
@@ -68,12 +69,27 @@ db.exec(`
   );
   INSERT OR IGNORE INTO bot_status (id, state, beat_at) VALUES (1, 'offline', 0);
 
+  CREATE TABLE IF NOT EXISTS chat_profile_versions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    chat_id       TEXT    NOT NULL,
+    pic_filename  TEXT,
+    pic_hash      TEXT,
+    name          TEXT,
+    about         TEXT,
+    description   TEXT,
+    is_business   INTEGER DEFAULT 0,
+    fetched_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_messages_user     ON messages(user_id);
   CREATE INDEX IF NOT EXISTS idx_messages_chat     ON messages(user_id, chat_id);
   CREATE INDEX IF NOT EXISTS idx_messages_chat_ts  ON messages(user_id, chat_id, timestamp);
   CREATE INDEX IF NOT EXISTS idx_messages_ts       ON messages(timestamp);
   CREATE INDEX IF NOT EXISTS idx_messages_type     ON messages(type);
   CREATE INDEX IF NOT EXISTS idx_chats_user        ON chats(user_id);
+  CREATE INDEX IF NOT EXISTS idx_profile_versions_chat
+    ON chat_profile_versions(user_id, chat_id, fetched_at DESC);
 `);
 
 // ── Prepared statements ──────────────────────────────────────────────────────
@@ -103,7 +119,50 @@ const stmts = {
       updated_at  = strftime('%s','now')
   `),
 
-  getChats: db.prepare(`SELECT * FROM chats WHERE user_id = ? ORDER BY last_msg_at DESC`),
+  // Chat list with the latest profile picture filename joined in via a
+  // correlated subquery (one indexed seek per row using idx_profile_versions_chat).
+  getChats: db.prepare(`
+    SELECT c.*,
+      (SELECT pic_filename FROM chat_profile_versions
+       WHERE user_id = c.user_id AND chat_id = c.chat_id
+       ORDER BY fetched_at DESC LIMIT 1) AS pic_filename
+    FROM chats c
+    WHERE c.user_id = ?
+    ORDER BY c.last_msg_at DESC
+  `),
+
+  getLatestProfile: db.prepare(`
+    SELECT * FROM chat_profile_versions
+    WHERE user_id = ? AND chat_id = ?
+    ORDER BY fetched_at DESC LIMIT 1
+  `),
+
+  getProfileHistory: db.prepare(`
+    SELECT * FROM chat_profile_versions
+    WHERE user_id = ? AND chat_id = ?
+    ORDER BY fetched_at DESC
+  `),
+
+  insertProfileVersion: db.prepare(`
+    INSERT INTO chat_profile_versions
+      (user_id, chat_id, pic_filename, pic_hash, name, about, description, is_business)
+    VALUES
+      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @about, @description, @is_business)
+  `),
+
+  deleteChatProfileHistory: db.prepare(`
+    DELETE FROM chat_profile_versions WHERE user_id = ? AND chat_id = ?
+  `),
+
+  selectProfilePicsForChat: db.prepare(`
+    SELECT DISTINCT pic_filename FROM chat_profile_versions
+    WHERE user_id = ? AND chat_id = ? AND pic_filename IS NOT NULL
+  `),
+
+  selectProfilePicsForUser: db.prepare(`
+    SELECT DISTINCT pic_filename FROM chat_profile_versions
+    WHERE user_id = ? AND pic_filename IS NOT NULL
+  `),
 
   getMessages: db.prepare(`
     SELECT * FROM (
@@ -155,7 +214,17 @@ function getAllUsers() {
 }
 
 function deleteUser(id) {
-  // CASCADE deletes messages and chats via FK
+  // Sweep profile-pic files before the FK cascade wipes the rows that
+  // tell us which files to remove.
+  try {
+    const pics = stmts.selectProfilePicsForUser.all(id);
+    for (const { pic_filename } of pics) {
+      try { fs.unlinkSync(path.join(MEDIA_DIR, pic_filename)); }
+      catch (err) { if (err.code !== 'ENOENT') console.warn(`⚠️  Failed to delete profile pic ${pic_filename}:`, err.message); }
+    }
+  } catch (err) { console.warn(`⚠️  Profile pic sweep failed for user ${id}:`, err.message); }
+
+  // CASCADE deletes messages, chats, and chat_profile_versions via FK
   stmts.deleteUser.run(id);
 }
 
@@ -293,15 +362,62 @@ function deleteMessages(userId, ids) {
 // ── Delete chat ──────────────────────────────────────────────────────────────
 function deleteChat(userId, chatId) {
   const rows = db.prepare('SELECT media_file FROM messages WHERE user_id = ? AND chat_id = ?').all(userId, chatId);
-  rows.forEach(r => { 
-    if (r.media_file) { 
+  rows.forEach(r => {
+    if (r.media_file) {
       try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
-      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); } 
+      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); }
     }
   });
+
+  // Sweep profile-pic files for this chat (filenames embed the chatId so
+  // there's no overlap with other chats' history).
+  const pics = stmts.selectProfilePicsForChat.all(userId, chatId);
+  for (const { pic_filename } of pics) {
+    try { fs.unlinkSync(path.join(MEDIA_DIR, pic_filename)); }
+    catch (err) { if (err.code !== 'ENOENT') console.warn(`⚠️  Failed to delete profile pic ${pic_filename}:`, err.message); }
+  }
+  stmts.deleteChatProfileHistory.run(userId, chatId);
+
   const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
   db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
   return { deleted: result.changes };
+}
+
+// ── Profile versions ─────────────────────────────────────────────────────────
+// Append-only timeline of contact/group profile snapshots. The session manager
+// downloads the bytes; we hash, dedupe, and persist. If nothing changed since
+// the last snapshot we return the existing row — no new file, no new DB row.
+function saveProfileVersion(userId, chatId, { picBytes, name, about, description, isBusiness }) {
+  const picHash = picBytes ? crypto.createHash('sha256').update(picBytes).digest('hex') : null;
+
+  const safeChat = String(chatId).replace(/[@.]/g, '_');
+  const picFilename = picBytes ? `${userId}_pic_${safeChat}_${picHash.slice(0, 16)}.jpg` : null;
+
+  const latest = stmts.getLatestProfile.get(userId, chatId);
+  const same = latest
+    && (latest.pic_hash    || null) === picHash
+    && (latest.name        || null) === (name        || null)
+    && (latest.about       || null) === (about       || null)
+    && (latest.description || null) === (description || null)
+    && !!latest.is_business         === !!isBusiness;
+  if (same) return latest;
+
+  if (picBytes && picFilename) {
+    const fp = path.join(MEDIA_DIR, picFilename);
+    if (!fs.existsSync(fp)) fs.writeFileSync(fp, picBytes);
+  }
+
+  const result = stmts.insertProfileVersion.run({
+    user_id:      userId,
+    chat_id:      chatId,
+    pic_filename: picFilename,
+    pic_hash:     picHash,
+    name:         name        || null,
+    about:        about       || null,
+    description:  description || null,
+    is_business:  isBusiness ? 1 : 0,
+  });
+  return stmts.getLatestProfile.get(userId, chatId);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -335,11 +451,14 @@ module.exports = {
   createUser, updateUser, getAllUsers, deleteUser,
   saveMessage, attachMediaToMessage, deleteMessages, deleteChat,
   setBotOnline, setBotOffline, getBotStatus,
-  getChats:       (userId) => stmts.getChats.all(userId),
-  getMessages:    (userId, chatId, limit = 100, offset = 0) => stmts.getMessages.all(userId, chatId, limit, offset),
-  searchMessages: (userId, q) => stmts.searchMessages.all(userId, '%' + q + '%'),
-  getStats:       (userId) => stmts.getStats.get(userId, userId, userId, userId, userId),
-  getGlobalStats: () => stmts.getGlobalStats.get(),
-  getMediaPath:        (filename) => path.join(MEDIA_DIR, path.basename(filename)),
-  getMimetypeForFile:  (filename) => stmts.getMimetypeForFile.get(filename)?.mimetype || null,
+  saveProfileVersion,
+  getChats:           (userId) => stmts.getChats.all(userId),
+  getMessages:        (userId, chatId, limit = 100, offset = 0) => stmts.getMessages.all(userId, chatId, limit, offset),
+  searchMessages:     (userId, q) => stmts.searchMessages.all(userId, '%' + q + '%'),
+  getStats:           (userId) => stmts.getStats.get(userId, userId, userId, userId, userId),
+  getGlobalStats:     () => stmts.getGlobalStats.get(),
+  getLatestProfile:   (userId, chatId) => stmts.getLatestProfile.get(userId, chatId) || null,
+  getProfileHistory:  (userId, chatId) => stmts.getProfileHistory.all(userId, chatId),
+  getMediaPath:       (filename) => path.join(MEDIA_DIR, path.basename(filename)),
+  getMimetypeForFile: (filename) => stmts.getMimetypeForFile.get(filename)?.mimetype || null,
 };

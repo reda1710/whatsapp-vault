@@ -232,6 +232,12 @@
     letter-spacing: -0.02em;
   }
 
+  /* Profile-pic variant of .avatar — preserves circular crop on real images. */
+  .avatar-img {
+    object-fit: cover;
+    background: var(--border2);
+  }
+
   .chat-meta { flex: 1; min-width: 0; }
   .chat-name {
     font-size: 13px;
@@ -286,7 +292,10 @@
     border-bottom: 1px solid var(--border);
     background: var(--surface);
     flex-shrink: 0;
+    cursor: pointer;
+    transition: background .15s;
   }
+  .chat-header:hover { background: var(--panel); }
 
   .chat-header .name {
     font-size: 15px;
@@ -851,6 +860,154 @@
   }
   .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
+  /* ── Profile modal ───────────────────────────────── */
+  .profile-modal-body {
+    width: 360px;
+    position: relative;
+    text-align: center;
+  }
+  .profile-close {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 16px;
+    cursor: pointer;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .profile-close:hover { background: var(--border); color: var(--text); }
+  .profile-pic-wrap {
+    width: 128px;
+    height: 128px;
+    margin: 4px auto 16px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--border2);
+  }
+  .profile-pic-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .profile-pic-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 36px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .profile-name {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+    word-break: break-word;
+    color: var(--text);
+  }
+  .profile-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  .profile-fields {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .profile-field {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .profile-field-key {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .profile-field-val {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.45;
+    word-break: break-word;
+  }
+  .profile-field-empty {
+    text-align: center;
+    color: var(--muted);
+    font-style: italic;
+    border-style: dashed;
+  }
+  .profile-history-toggle {
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .profile-history {
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    max-height: 240px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+  .history-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .history-row:last-child { border-bottom: none; }
+  .history-thumb {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--border2);
+  }
+  .history-meta { flex: 1; min-width: 0; }
+  .history-fields {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.4;
+  }
+  .history-field {
+    display: inline;
+  }
+  .history-field-muted {
+    color: var(--muted);
+    font-style: italic;
+  }
+  .history-time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
 
   /* ── Login overlay ───────────────────────────────── */
   .login-overlay {
@@ -1137,6 +1294,14 @@
       border-radius: 0; padding: 24px 20px;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
     }
+
+    /* Profile modal: full-screen on mobile, scroll the long history list. */
+    #profile-modal .profile-modal-body {
+      width: 100%; height: 100%; max-width: none;
+      border-radius: 0; padding: 60px 20px 24px;
+      overflow-y: auto;
+    }
+    .profile-pic-wrap { width: 144px; height: 144px; }
 
     /* Reconnect banner stacks if cramped */
     .reconnect-banner { flex-wrap: wrap; gap: 6px; padding: 8px 12px; font-size: 11px; }

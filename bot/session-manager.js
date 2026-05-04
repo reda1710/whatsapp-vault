@@ -3,6 +3,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode               = require('qrcode-terminal');
 const qrcodeLib            = require('qrcode');
+const https                = require('https');
 const path                 = require('path');
 const fs                   = require('fs');
 const { execSync, spawnSync } = require('child_process');
@@ -26,6 +27,40 @@ const HARMLESS = [
 const isHarmless = m => HARMLESS.some(s => m.includes(s));
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Cap to keep an unexpectedly large response from blowing up memory; profile
+// pics are normally < 100 KB, but the URL could in theory point anywhere.
+const MAX_PROFILE_PIC_BYTES = 5 * 1024 * 1024;
+
+function downloadBuffer(url) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, res => {
+      // Follow simple 3xx redirects (WhatsApp's CDN rarely uses them, but cheap to handle).
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(downloadBuffer(res.headers.location));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`HTTP ${res.statusCode}`));
+      }
+      const chunks = [];
+      let total = 0;
+      res.on('data', c => {
+        total += c.length;
+        if (total > MAX_PROFILE_PIC_BYTES) {
+          req.destroy(new Error('profile pic too large'));
+          return;
+        }
+        chunks.push(c);
+      });
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => req.destroy(new Error('profile pic fetch timeout')));
+  });
+}
 
 function killChrome(userId) {
   // No shell wrapper: pkill is the only process containing the pattern, and
@@ -73,6 +108,7 @@ class Session extends EventEmitter {
     this.qrData        = null;      // latest QR as base64 PNG data URL
     this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
     this.processingLateMedia  = false;
+    this._profileInflight     = new Map(); // chatId → Promise — dedupes concurrent refreshProfile calls
   }
 
   async start() {
@@ -384,6 +420,54 @@ class Session extends EventEmitter {
       }
     }
     this.processingLateMedia = false;
+  }
+
+  // Pull the contact/group profile from WhatsApp Web, dedupe against the last
+  // stored snapshot, and return the latest version row. Concurrent calls for
+  // the same chat share one in-flight promise so a click-spam can't fan out.
+  async refreshProfile(chatId) {
+    if (!this.client) throw new Error('Session offline');
+    if (this._profileInflight.has(chatId)) return this._profileInflight.get(chatId);
+    const promise = this._doRefreshProfile(chatId)
+      .finally(() => this._profileInflight.delete(chatId));
+    this._profileInflight.set(chatId, promise);
+    return promise;
+  }
+
+  async _doRefreshProfile(chatId) {
+    const chat = await this._retry(() => this.client.getChatById(chatId));
+
+    let picUrl = null;
+    try { picUrl = await this.client.getProfilePicUrl(chatId); }
+    catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getProfilePicUrl(${chatId}) failed:`, e.message.split('\n')[0]); }
+
+    let about = null, description = null, isBusiness = false;
+    if (chat.isGroup) {
+      description = chat.description || chat.groupMetadata?.desc || null;
+    } else {
+      try {
+        const contact = await chat.getContact();
+        isBusiness = !!contact?.isBusiness;
+        try { about = await contact.getAbout(); }
+        catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getAbout(${chatId}) failed:`, e.message.split('\n')[0]); }
+      } catch (e) {
+        if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getContact(${chatId}) failed:`, e.message.split('\n')[0]);
+      }
+    }
+
+    let picBytes = null;
+    if (picUrl) {
+      try { picBytes = await downloadBuffer(picUrl); }
+      catch (e) { console.warn(`⚠️  [${this.userName}] profile-pic download failed:`, e.message); }
+    }
+
+    return db.saveProfileVersion(this.userId, chatId, {
+      picBytes,
+      name: chat.name || null,
+      about,
+      description,
+      isBusiness,
+    });
   }
 
   async _retry(fn, attempts = 3, delay = 800) {

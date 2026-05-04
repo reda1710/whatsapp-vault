@@ -95,9 +95,10 @@
   <!-- Chat area -->
   <div class="chat-area">
 
-    <!-- Chat header -->
-    <div class="chat-header" id="chat-header" style="display:none">
-      <button class="chat-back-btn" onclick="closeChatView()" aria-label="Back to chat list">←</button>
+    <!-- Chat header (click anywhere outside the back button to open the profile modal) -->
+    <div class="chat-header" id="chat-header" style="display:none"
+         onclick="if(!event.target.closest('.chat-back-btn'))openProfileModal(currentChatId)">
+      <button class="chat-back-btn" onclick="event.stopPropagation();closeChatView()" aria-label="Back to chat list">←</button>
       <div class="avatar" id="chat-avatar">?</div>
       <div>
         <div class="name" id="chat-name"></div>
@@ -148,6 +149,21 @@
       <button class="btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn-danger" id="modal-confirm-btn" onclick="modalConfirm()">Delete</button>
     </div>
+  </div>
+</div>
+
+<!-- Profile modal -->
+<div class="modal-overlay" id="profile-modal" onclick="if(event.target===this)closeProfileModal()">
+  <div class="modal profile-modal-body">
+    <button class="profile-close" onclick="closeProfileModal()" aria-label="Close">✕</button>
+    <div class="profile-pic-wrap" id="profile-pic-large"></div>
+    <h3 class="profile-name" id="profile-name"></h3>
+    <div class="profile-sub" id="profile-sub"></div>
+    <div class="profile-fields" id="profile-fields"></div>
+    <div class="profile-history-toggle">
+      <button class="btn-ghost" id="profile-history-btn" onclick="toggleProfileHistory()">Show history</button>
+    </div>
+    <div class="profile-history" id="profile-history" hidden></div>
   </div>
 </div>
 

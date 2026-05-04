@@ -231,6 +231,41 @@ app.get('/api/chats/:chatId/messages', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Contact profile ───────────────────────────────────────────────────────────
+// Latest stored snapshot. No WhatsApp call.
+app.get('/api/chats/:chatId/profile', (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId, 10);
+    const chatId = decodeURIComponent(req.params.chatId);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    res.json(db.getLatestProfile(userId, chatId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Active fetch from WhatsApp. Dedupes against the last stored row — only writes
+// a new version (and a new file on disk) if something actually changed.
+app.post('/api/chats/:chatId/profile/refresh', async (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId, 10);
+    const chatId = decodeURIComponent(req.params.chatId);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    const session = manager.getSession(userId);
+    if (!session?.client) return res.status(503).json({ error: 'Session offline' });
+    const row = await session.refreshProfile(chatId);
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Full version timeline for the modal's history view.
+app.get('/api/chats/:chatId/profile/history', (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId, 10);
+    const chatId = decodeURIComponent(req.params.chatId);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    res.json(db.getProfileHistory(userId, chatId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Search ────────────────────────────────────────────────────────────────────
 app.get('/api/search', (req, res) => {
   try {
