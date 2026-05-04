@@ -460,14 +460,12 @@ class Session extends EventEmitter {
           let number = null;
           try {
             const c = await this.client.getContactById(p.id);
-            number = c?.number
-              || (c?.id?.server === 'c.us' ? c?.id?.user : null)
-              || null;
+            try {
+              const fmt = await c.getFormattedNumber();
+              if (fmt) number = fmt.replace(/[\s()\-]/g, '') || null;
+            } catch {}
             if (!number) {
-              try {
-                const fmt = await c.getFormattedNumber();
-                if (fmt) number = fmt.replace(/[\s\-() ]/g, '') || null;
-              } catch {}
+              number = (c?.id?.server === 'c.us' ? c?.number || c?.id?.user : null) || null;
             }
           } catch {/* contact not in store yet — leave null */}
           return { ...p, number };
@@ -477,21 +475,18 @@ class Session extends EventEmitter {
       try {
         const contact = await chat.getContact();
         isBusiness = !!contact?.isBusiness;
-        // Try every available source for the real phone number. For @lid
-        // contacts, contact.number is often null because WA hides it;
-        // getFormattedNumber() uses a separate WA API call that resolves it.
-        phone = contact?.number
-          || (contact?.id?.server === 'c.us' ? contact?.id?.user : null)
-          || (chat?.id?.server    === 'c.us' ? chat?.id?.user    : null)
-          || null;
+        // getFormattedNumber() does a real WA API lookup — it returns the actual
+        // phone (e.g. "+1 (234) 5678-901") regardless of id format, so use it first.
+        // contact.number for @lid contacts returns the lid user-part (NOT a
+        // phone), so only trust it when the contact's own server is 'c.us'.
+        try {
+          const fmt = await contact.getFormattedNumber();
+          if (fmt) phone = fmt.replace(/[\s()\-]/g, '') || null;
+        } catch { /* not available in this wwebjs build */ }
         if (!phone) {
-          try {
-            const fmt = await contact.getFormattedNumber();
-            // Docs: (12345678901@c.us) => "+1 (234) 5678-901"
-            // Strip formatting chars but keep digits and the leading + so we
-            // store a clean E.164 like "+12345678901".
-            if (fmt) phone = fmt.replace(/[\s\-() ]/g, '') || null;
-          } catch { /* not available in this wwebjs build — continue */ }
+          phone = (contact?.id?.server === 'c.us' ? contact?.number || contact?.id?.user : null)
+               || (chat?.id?.server    === 'c.us' ? chat?.id?.user : null)
+               || null;
         }
         try { about = await contact.getAbout(); }
         catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getAbout(${chatId}) failed:`, e.message.split('\n')[0]); }
