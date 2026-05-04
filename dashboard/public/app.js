@@ -201,7 +201,7 @@ function previewText(type, body) {
 async function selectChat(chatId, name, isGroup, count) {
   currentChatId = chatId;
   currentFilter = 'all';
-  msgOffset     = 0;
+  loadedCount   = 0;
   hasMoreMsgs   = false;
   document.querySelectorAll('.filter-btn').forEach((b,i)=>b.classList.toggle('active',i===0));
   document.getElementById('chat-header').style.display = 'flex';
@@ -245,38 +245,42 @@ function toggleStatsMenu(e) {
 }
 
 // ── Load messages ───────────────────────────────────────────────────────
-let msgOffset    = 0;
-const MSG_LIMIT  = 100;   // messages loaded per page
+// Server returns the latest N messages (offset M from the newest) in ASC
+// order. Fresh load = offset 0 → newest 50. Load-more = offset loadedCount
+// → next 50 older, prepended to allMessages.
+let loadedCount  = 0;
+const MSG_LIMIT  = 50;
 let hasMoreMsgs  = false;
 
-async function loadMessages(chatId, append = false) {
-  const box = document.getElementById('messages');
-  if (!append) {
-    msgOffset = 0;
+async function loadMessages(chatId, prepend = false, limitOverride) {
+  const box   = document.getElementById('messages');
+  const limit = limitOverride ?? MSG_LIMIT;
+  if (!prepend) {
+    loadedCount = 0;
     allMessages = [];
     box.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   }
   try {
-    const r    = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?userId=${currentUserId}&limit=${MSG_LIMIT}&offset=${msgOffset}`);
+    const r    = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?userId=${currentUserId}&limit=${limit}&offset=${loadedCount}`);
     const page = await r.json();
-    hasMoreMsgs = page.length === MSG_LIMIT;
-    allMessages = append ? [...allMessages, ...page] : page;
-    msgOffset  += page.length;
+    hasMoreMsgs = page.length === limit;
+    allMessages = prepend ? [...page, ...allMessages] : page;
+    loadedCount += page.length;
     renderMessages();
-    // Scroll to bottom only on first load
-    // if (!append) box.scrollTop = box.scrollHeight;
   } catch {
-    if (!append) box.innerHTML = `<div class="empty"><h3>Failed to load</h3></div>`;
+    if (!prepend) box.innerHTML = `<div class="empty"><h3>Failed to load</h3></div>`;
   }
 }
 
 async function loadMoreMessages() {
   if (!currentChatId || !hasMoreMsgs) return;
-  const box      = document.getElementById('messages');
-  const prevH    = box.scrollHeight;
+  const box     = document.getElementById('messages');
+  const prevH   = box.scrollHeight;
+  const prevTop = box.scrollTop;
   await loadMessages(currentChatId, true);
-  // Keep scroll position after prepending older messages
-  box.scrollTop = box.scrollHeight - prevH;
+  // Anchor the user's view: keep the same message under the cursor by
+  // shifting scrollTop by the height of the freshly-prepended block.
+  box.scrollTop = prevTop + (box.scrollHeight - prevH);
 }
 
 // Reload the active chat without yanking the user's scroll position OR
@@ -304,10 +308,12 @@ async function reloadCurrentChatMessages() {
     if (v.currentTime > 0 && !v.ended) videoStates.set(v.id, v.currentTime);
   }
 
-  // 3. Reload + restore scroll
+  // 3. Reload + restore scroll. Pass loadedCount as the limit so we keep
+  // however many older pages the user already expanded; otherwise an SSE
+  // tick would silently snap them back to just the latest 50.
   const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
   const oldScrollTop  = box.scrollTop;
-  await loadMessages(currentChatId, false);
+  await loadMessages(currentChatId, false, Math.max(MSG_LIMIT, loadedCount));
   box.scrollTop = wasNearBottom ? box.scrollHeight : oldScrollTop;
 
   // 4. Restore video positions on the freshly-rendered <video> elements.

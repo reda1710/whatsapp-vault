@@ -105,7 +105,10 @@ const stmts = {
   getChats: db.prepare(`SELECT * FROM chats WHERE user_id = ? ORDER BY last_msg_at DESC`),
 
   getMessages: db.prepare(`
-    SELECT * FROM messages WHERE user_id = ? AND chat_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?
+    SELECT * FROM (
+      SELECT * FROM messages WHERE user_id = ? AND chat_id = ?
+      ORDER BY timestamp DESC LIMIT ? OFFSET ?
+    ) ORDER BY timestamp ASC
   `),
 
   searchMessages: db.prepare(`

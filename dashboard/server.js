@@ -224,7 +224,7 @@ app.get('/api/chats', (req, res) => {
 app.get('/api/chats/:chatId/messages', (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
-    const limit  = Math.min(parseInt(req.query.limit  || '100', 10), 500);
+    const limit  = parseInt(req.query.limit || '50', 10) || 50;
     const offset = parseInt(req.query.offset || '0', 10);
     if (!userId) return res.status(400).json({ error: 'userId required' });
     res.json(db.getMessages(userId, decodeURIComponent(req.params.chatId), limit, offset));
