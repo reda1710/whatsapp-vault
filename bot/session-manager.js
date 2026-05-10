@@ -14,6 +14,9 @@ const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
 const READY_TIMEOUT = 160 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
+const PROFILE_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // every 30 min
+const PROFILE_REFRESH_DELAY_MS    = 60 * 1000;      // first sweep after ready (let WA finish syncing)
+const PROFILE_REFRESH_THROTTLE_MS = 500;            // between individual chat refreshes
 
 const CHROME_BIN =
   process.env.PUPPETEER_EXECUTABLE_PATH ||
@@ -109,6 +112,7 @@ class Session extends EventEmitter {
     this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
     this.processingLateMedia  = false;
     this._profileInflight     = new Map(); // chatId → Promise — dedupes concurrent refreshProfile calls
+    this.profileRefreshTimer  = null;      // recurring sweep timer (setTimeout, recursive)
   }
 
   async start() {
@@ -226,6 +230,10 @@ class Session extends EventEmitter {
       this.emit('ready', { userId: this.userId, name: this.userName });
       const s = db.getStats(this.userId);
       console.log(`✅ [${this.userName}] Live! ${s.total_messages} msgs\n`);
+
+      // Kick off the recurring profile sweep. First run after a short delay so
+      // WA finishes the initial chat sync before we start hammering it.
+      this._scheduleProfileRefresh();
     });
 
     client.on('auth_failure', async msg => {
@@ -278,11 +286,13 @@ class Session extends EventEmitter {
   async _destroy() {
     clearTimeout(this.qrTimer);
     clearTimeout(this.readyTimer);
-    this.qrTimer       = null;
-    this.readyTimer    = null;
-    this.booting       = false;
-    this.authenticated = false;
-    this._qrPrinted    = false;
+    clearTimeout(this.profileRefreshTimer);
+    this.qrTimer             = null;
+    this.readyTimer          = null;
+    this.profileRefreshTimer = null;
+    this.booting             = false;
+    this.authenticated       = false;
+    this._qrPrinted          = false;
     const c = this.client;
     this.client = null;
     if (!c) return;
@@ -510,6 +520,65 @@ class Session extends EventEmitter {
       isBusiness,
       participants,
     });
+  }
+
+  // ── Background profile-refresh scheduler ────────────────────────────────
+  // setTimeout-recursive (not setInterval) so a slow sweep can't overlap
+  // with the next tick. Idempotent — calling again replaces any existing timer.
+  _scheduleProfileRefresh() {
+    if (this.profileRefreshTimer) clearTimeout(this.profileRefreshTimer);
+    const tick = async () => {
+      if (this.stopping || !this.client) return;
+      try { await this._refreshAllProfiles(); }
+      catch (e) { console.warn(`⚠️  [${this.userName}] profile sweep failed:`, e.message.split('\n')[0]); }
+      if (this.stopping || !this.client) return;
+      this.profileRefreshTimer = setTimeout(tick, PROFILE_REFRESH_INTERVAL_MS);
+    };
+    this.profileRefreshTimer = setTimeout(tick, PROFILE_REFRESH_DELAY_MS);
+  }
+
+  // Two-phase sweep: refresh every chat, then refresh every unique group
+  // participant that wasn't already a top-level chat. refreshProfile dedupes
+  // both content-wise (no rewrite if unchanged) and in-flight-wise (shares the
+  // outstanding Promise with any concurrent user click).
+  async _refreshAllProfiles() {
+    const chats = db.getChats(this.userId);
+    if (chats.length === 0) return;
+    console.log(`🔄 [${this.userName}] Profile sweep: ${chats.length} chats`);
+
+    const refreshedIds = new Set();
+
+    for (const c of chats) {
+      if (this.stopping || !this.client) return;
+      try { await this.refreshProfile(c.chat_id); refreshedIds.add(c.chat_id); }
+      catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] profile refresh ${c.chat_id} failed:`, e.message.split('\n')[0]); }
+      await sleep(PROFILE_REFRESH_THROTTLE_MS);
+    }
+
+    const memberIds = new Set();
+    for (const c of chats) {
+      if (!c.is_group) continue;
+      const latest = db.getLatestProfile(this.userId, c.chat_id);
+      if (!latest?.participants) continue;
+      try {
+        const arr = JSON.parse(latest.participants);
+        for (const p of arr) {
+          if (p?.id && !refreshedIds.has(p.id)) memberIds.add(p.id);
+        }
+      } catch { /* malformed JSON — skip */ }
+    }
+
+    if (memberIds.size > 0) {
+      console.log(`🔄 [${this.userName}] Member sweep: ${memberIds.size} unique participants`);
+      for (const mid of memberIds) {
+        if (this.stopping || !this.client) return;
+        try { await this.refreshProfile(mid); }
+        catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] member refresh ${mid} failed:`, e.message.split('\n')[0]); }
+        await sleep(PROFILE_REFRESH_THROTTLE_MS);
+      }
+    }
+
+    console.log(`✅ [${this.userName}] Profile sweep done (${refreshedIds.size} chats + ${memberIds.size} members)`);
   }
 
   async _retry(fn, attempts = 3, delay = 800) {
