@@ -349,60 +349,77 @@ async function loadMoreMessages() {
   box.scrollTop = prevTop + (box.scrollHeight - prevH);
 }
 
-// Reload the active chat without yanking the user's scroll position OR
-// destroying playback state. loadMessages wipes box.innerHTML, which:
-//   - resets scrollTop to 0
-//   - replaces every <video> element (currentTime back to 0)
-//   - replaces the .voice-dur span (visual timer back to 0:00, even though
-//     the JS Audio object keeps its real currentTime)
-// We skip the reload entirely if anything is *playing* (don't disrupt active
-// playback). For *paused* media we capture playback positions before the
-// wipe and restore them after.
+// Background reloads (10s poll, SSE) refresh the active chat without yanking
+// the user's scroll. We fetch silently (never wiping innerHTML during the
+// network trip), then diff-render by data-id so surviving message nodes —
+// with their already-loaded images, paused videos, and voice-note timers —
+// stay in place. Idle polls (no message changes) become true no-ops.
 async function reloadCurrentChatMessages() {
   if (!currentChatId) return;
   const box = document.getElementById('messages');
 
-  // 1. Hard-skip while playing
   if (currentAudio && !currentAudio.paused) return;
   for (const v of box.querySelectorAll('video')) {
     if (!v.paused) return;
   }
 
-  // 2. Capture paused-but-mid-playback video positions (by id)
-  const videoStates = new Map();
-  for (const v of box.querySelectorAll('video[id]')) {
-    if (v.currentTime > 0 && !v.ended) videoStates.set(v.id, v.currentTime);
-  }
-
-  // 3. Reload + restore scroll. Pass loadedCount as the limit so we keep
-  // however many older pages the user already expanded; otherwise an SSE
+  // Keep however many older pages the user already expanded; otherwise an SSE
   // tick would silently snap them back to just the latest 50.
-  const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
-  const oldScrollTop  = box.scrollTop;
-  await loadMessages(currentChatId, false, Math.max(MSG_LIMIT, loadedCount));
-  box.scrollTop = wasNearBottom ? box.scrollHeight : oldScrollTop;
+  const limit = Math.max(MSG_LIMIT, loadedCount);
+  let page, more;
+  try {
+    const r = await apiFetch(`${API}/chats/${encodeURIComponent(currentChatId)}/messages?userId=${currentUserId}&limit=${limit + 1}&offset=0`);
+    page = await r.json();
+    more = page.length > limit;
+    if (more) page = page.slice(1);
+  } catch {
+    return;
+  }
+  hasMoreMsgs = more;
 
-  // 4. Restore video positions on the freshly-rendered <video> elements.
-  // Setting currentTime before metadata loads is queued by the browser, but
-  // some implementations are flaky — fall back to a loadedmetadata listener.
-  for (const [id, time] of videoStates) {
-    const v = document.getElementById(id);
-    if (!v) continue;
-    if (v.readyState >= 1) v.currentTime = time;
-    else v.addEventListener('loadedmetadata', () => { v.currentTime = time; }, { once: true });
+  const oldIds = allMessages.map(m => m.id).join(',');
+  const newIds = page.map(m => m.id).join(',');
+  if (oldIds === newIds) return;
+
+  const filtered = (currentFilter === 'all') ? page : page.filter(m => m.type === currentFilter);
+  const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
+
+  if (filtered.length === 0) {
+    box.innerHTML = `<div class="empty"><div class="empty-icon">🔍</div><h3>No messages</h3><p>No ${currentFilter === 'all' ? '' : currentFilter + ' '}messages in this chat.</p></div>`;
+    allMessages = page;
+    loadedCount = page.length;
+    return;
   }
 
-  // 5. Repaint the voice-note timer if a paused Audio is still loaded —
-  // its currentTime survived in the JS object but the span shows 0:00.
-  if (currentAudio && currentAudioId && currentAudio.currentTime > 0) {
-    const dur = document.querySelector(`#${currentAudioId} .voice-dur`);
-    if (dur) {
-      const t = currentAudio.currentTime;
-      const m = Math.floor(t / 60);
-      const s = Math.floor(t % 60).toString().padStart(2, '0');
-      dur.textContent = `${m}:${s}`;
+  const keepIds = new Set(filtered.map(m => m.id));
+  for (const node of [...box.children]) {
+    const isMsg = node.classList?.contains('msg-wrap');
+    if (!isMsg || !keepIds.has(parseInt(node.dataset.id, 10))) node.remove();
+  }
+
+  let cursor = box.firstElementChild;
+  for (const m of filtered) {
+    if (cursor && parseInt(cursor.dataset.id, 10) === m.id) {
+      cursor = cursor.nextElementSibling;
+    } else {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderMessage(m);
+      box.insertBefore(tmp.firstElementChild, cursor);
     }
   }
+
+  if (hasMoreMsgs) {
+    box.insertAdjacentHTML('afterbegin', `<div style="text-align:center;padding:10px 0">
+        <button onclick="loadMoreMessages()" style="font-family:var(--mono);font-size:11px;padding:5px 14px;border-radius:6px;border:1px solid var(--border2);background:transparent;color:var(--subtle);cursor:pointer">
+          ↑ Load older messages
+        </button>
+       </div>`);
+  }
+
+  allMessages = page;
+  loadedCount = page.length;
+
+  if (wasNearBottom) box.scrollTop = box.scrollHeight;
 }
 
 function renderMessages() {
