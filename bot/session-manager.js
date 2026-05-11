@@ -328,17 +328,24 @@ class Session extends EventEmitter {
       } catch (e) { console.warn(`⚠️  [${this.userName}] vote capture failed:`, e.message.split('\n')[0]); }
     });
 
-    // Incoming calls — log only; WA Web doesn't expose call answering.
+    // Calls — wwebjs's incoming_call event is unreliable and never fires for
+    // outgoing calls. Both directions show up as call_log messages instead;
+    // _processMessage handles those. We keep this handler as a backup so
+    // ringing notifications (which arrive before the call_log) still get
+    // recorded. recordCall dedupes by call_id / (peer, ±5s) so the two
+    // sources can't double-count.
     client.on('incoming_call', call => {
       if (!isActive() || !call) return;
       try {
         db.recordCall(this.userId, {
-          call_id:   call.id   || null,
-          peer_id:   call.from || null,
+          call_id:   call.id      || null,
+          peer_id:   call.from    || call.peerJid || null,
+          from_me:   !!call.fromMe,
           is_video:  !!call.isVideo,
           is_group:  !!call.isGroup,
           timestamp: call.timestamp || Math.floor(Date.now()/1000),
         });
+        this.emit('call', { userId: this.userId });
       } catch (e) { console.warn(`⚠️  [${this.userName}] call capture failed:`, e.message.split('\n')[0]); }
     });
 
@@ -499,6 +506,32 @@ class Session extends EventEmitter {
       if (msg.type === 'poll_creation' && entry.wa_id) {
         const opts = (msg.pollOptions || msg.options || []).map(o => o?.name || o?.localId?.toString() || String(o));
         if (opts.length) db.recordPollOptions(this.userId, entry.wa_id, opts);
+      }
+      // Call log — wwebjs surfaces every call (incoming AND outgoing) as a
+      // call_log message. _data carries the real metadata; the surface fields
+      // are inconsistent across wwebjs versions, so we read defensively.
+      if (msg.type === 'call_log') {
+        const d = msg._data || {};
+        const callType = d.callType || d.callOutcome || d.subtype || null;
+        const isVideo = !!(d.isVideoCall || d.callIsVideo || /video/i.test(callType || ''));
+        // Common subtype values: 'accepted', 'missed', 'rejected', 'declined', 'silenced'.
+        const subtype = d.callOutcome
+                     || d.subtype
+                     || ((msg.body || '').toLowerCase().includes('missed') ? 'missed' : null);
+        const duration = d.callDuration ?? d.duration ?? null;
+        try {
+          db.recordCall(this.userId, {
+            call_id:      entry.wa_id     || null,
+            peer_id:      entry.chat_id   || null,
+            from_me:      msg.fromMe,
+            is_video:     isVideo,
+            is_group:     !!chatInfo.isGroup,
+            subtype,
+            duration_sec: typeof duration === 'number' ? duration : null,
+            timestamp:    entry.timestamp,
+          });
+          this.emit('call', { userId: this.userId });
+        } catch (e) { console.warn(`⚠️  [${this.userName}] call_log capture failed:`, e.message.split('\n')[0]); }
       }
       const ICONS = { chat:'💬',ptt:'🎙️',audio:'🎵',image:'🖼️',video:'🎬',document:'📄',sticker:'🎭',location:'📍',vcard:'👤' };
       console.log(`${ICONS[msg.type]||'📨'} [${this.userName}/${chatInfo.name}] ${sender}: ${(entry.body||'<'+msg.type+'>').substring(0,60)}${mediaFile?' [saved]':''}`);
@@ -778,6 +811,7 @@ class SessionManager extends EventEmitter {
       session.on('message_revoke',  e => this.emit('message_revoke',  e));
       session.on('reaction',        e => this.emit('reaction',        e));
       session.on('vote_update',     e => this.emit('vote_update',     e));
+      session.on('call',            e => this.emit('call',            e));
     }
     session.start(); // async — don't await, returns immediately
     return session;

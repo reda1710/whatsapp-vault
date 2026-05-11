@@ -511,6 +511,8 @@ function renderMessage(m) {
     content = renderVcard(m);
   } else if (m.type === 'poll_creation') {
     content = renderPoll(m);
+  } else if (m.type === 'call_log') {
+    content = renderCallLog(m);
   } else {
     content = `<div class="bubble">${highlightMentions(m.body || '', m.mentions)}</div>`;
   }
@@ -564,6 +566,24 @@ function renderPoll(m) {
   return `<div class="bubble poll-bubble" id="poll-${m.id}" data-poll-wa="${escAttr(m.wa_id || '')}" data-poll-opts="${opts.length}">
     <div class="poll-title">📊 ${esc(m.body || 'Poll')}</div>
     ${lines}
+  </div>`;
+}
+
+// Call log bubble — direction arrow, outcome (missed/answered), and the
+// duration string from the body when present.
+function renderCallLog(m) {
+  const out = m.from_me;
+  const arrow = out ? '↗' : '↙';
+  const label = out ? 'Outgoing call' : 'Incoming call';
+  const body = (m.body || '').trim();
+  const isMissed = /missed/i.test(body);
+  const icon = isMissed ? '📵' : '📞';
+  const detail = body ? `<span class="call-detail">${esc(body)}</span>` : '';
+  return `<div class="bubble call-bubble">
+    <span class="call-icon">${icon}</span>
+    <span class="call-arrow">${arrow}</span>
+    <span class="call-label">${esc(label)}</span>
+    ${detail}
   </div>`;
 }
 

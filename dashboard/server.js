@@ -97,6 +97,7 @@ manager.on('message_edit',    data => broadcast('message_edit',    data));
 manager.on('message_revoke',  data => broadcast('message_revoke',  data));
 manager.on('reaction',        data => broadcast('reaction',        data));
 manager.on('vote_update',     data => broadcast('vote_update',     data));
+manager.on('call',            data => broadcast('call',            data));
 
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type',  'text/event-stream');

@@ -536,6 +536,18 @@
   }
   .poll-option-count { font-family: var(--mono); color: var(--muted); }
 
+  /* ── Call log bubble ─────────────────────────────── */
+  .call-bubble {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .call-icon  { font-size: 14px; }
+  .call-arrow { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+  .call-label { color: var(--text); }
+  .call-detail { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-left: 4px; }
+
   /* ── Group events / contact changes (profile modal) ─── */
   .group-events-list, .contact-changes-list { display: flex; flex-direction: column; gap: 4px; }
   .group-event {

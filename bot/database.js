@@ -197,6 +197,12 @@ ensureColumn('messages', 'ack', 'INTEGER');
 // Phase-4c: poll-creation messages carry their option list.
 ensureColumn('messages', 'poll_options', 'TEXT');
 
+// Calls — direction (from_me), outcome (accepted/missed/rejected), and duration
+// in seconds. Earlier versions only stored incoming calls without these.
+ensureColumn('calls', 'from_me',      'INTEGER DEFAULT 0');
+ensureColumn('calls', 'subtype',      'TEXT');
+ensureColumn('calls', 'duration_sec', 'INTEGER');
+
 // ── Prepared statements ──────────────────────────────────────────────────────
 const stmts = {
   insertUser:    db.prepare(`INSERT INTO users (name) VALUES (?) RETURNING *`),
@@ -356,8 +362,25 @@ const stmts = {
   `),
 
   insertCall: db.prepare(`
-    INSERT INTO calls (user_id, call_id, peer_id, is_video, is_group, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO calls (user_id, call_id, peer_id, from_me, is_video, is_group, subtype, duration_sec, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  // Dedupe by call_id when present — wwebjs may surface a call via both the
+  // incoming_call event AND a follow-up call_log message.
+  findCallByCallId: db.prepare(`SELECT id FROM calls WHERE user_id = ? AND call_id = ? LIMIT 1`),
+  // Fallback dedupe for call_log rows that have no stable id — collapse on
+  // (peer, timestamp) within a 5-second window.
+  findRecentCallByPeer: db.prepare(`
+    SELECT id FROM calls WHERE user_id = ? AND peer_id = ?
+      AND ABS(timestamp - ?) <= 5 LIMIT 1
+  `),
+  updateCallFields: db.prepare(`
+    UPDATE calls SET
+      subtype      = COALESCE(?, subtype),
+      duration_sec = COALESCE(?, duration_sec),
+      is_video     = COALESCE(?, is_video),
+      from_me      = COALESCE(?, from_me)
+    WHERE id = ?
   `),
   getCalls: db.prepare(`
     SELECT * FROM calls WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?
@@ -715,8 +738,35 @@ function getPollVotes(userId, pollWaId) {
   return stmts.getPollVotes.all(userId, pollWaId);
 }
 
-function recordCall(userId, { call_id, peer_id, is_video, is_group, timestamp }) {
-  stmts.insertCall.run(userId, call_id || null, peer_id || null, is_video ? 1 : 0, is_group ? 1 : 0, timestamp || Math.floor(Date.now()/1000));
+function recordCall(userId, { call_id, peer_id, from_me, is_video, is_group, subtype, duration_sec, timestamp }) {
+  const ts = timestamp || Math.floor(Date.now()/1000);
+  // Dedupe path: same call_id, or same peer within ±5s. wwebjs sometimes
+  // surfaces a call via both the incoming_call event AND a call_log message
+  // and we don't want two rows for the same event.
+  let existing = null;
+  if (call_id) existing = stmts.findCallByCallId.get(userId, call_id);
+  if (!existing && peer_id) existing = stmts.findRecentCallByPeer.get(userId, peer_id, ts);
+  if (existing) {
+    stmts.updateCallFields.run(
+      subtype ?? null,
+      duration_sec ?? null,
+      is_video == null ? null : (is_video ? 1 : 0),
+      from_me == null ? null : (from_me ? 1 : 0),
+      existing.id,
+    );
+    return;
+  }
+  stmts.insertCall.run(
+    userId,
+    call_id || null,
+    peer_id || null,
+    from_me ? 1 : 0,
+    is_video ? 1 : 0,
+    is_group ? 1 : 0,
+    subtype || null,
+    duration_sec ?? null,
+    ts,
+  );
 }
 
 function getCalls(userId, limit = 100) {
