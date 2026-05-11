@@ -339,7 +339,7 @@ class Session extends EventEmitter {
       try {
         db.recordCall(this.userId, {
           call_id:   call.id      || null,
-          peer_id:   call.from    || call.peerJid || null,
+          peer_id:   call.from || null,
           from_me:   !!call.fromMe,
           is_video:  !!call.isVideo,
           is_group:  !!call.isGroup,
@@ -469,8 +469,8 @@ class Session extends EventEmitter {
         lat:           msg.location?.latitude  || null,
         lng:           msg.location?.longitude || null,
         // quotedStanzaID is the bare id of the parent message; cross-references
-        // the wa_id column. wwebjs exposes it on the underlying _data proto.
-        quoted_wa_id:  msg.hasQuotedMsg ? (msg._data?.quotedStanzaID || null) : null,
+        // the wa_id column. Lives on the documented rawData proto accessor.
+        quoted_wa_id:  msg.hasQuotedMsg ? (msg.rawData?.quotedStanzaID || null) : null,
         mentions:      (msg.mentionedIds && msg.mentionedIds.length) ? JSON.stringify(msg.mentionedIds) : null,
         is_forwarded:  msg.isForwarded ? 1 : 0,
         forward_score: msg.forwardingScore || null,
@@ -508,17 +508,24 @@ class Session extends EventEmitter {
         if (opts.length) db.recordPollOptions(this.userId, entry.wa_id, opts);
       }
       // Call log — wwebjs surfaces every call (incoming AND outgoing) as a
-      // call_log message. _data carries the real metadata; the surface fields
-      // are inconsistent across wwebjs versions, so we read defensively.
+      // call_log message. The only documented call-related surface is
+      // msg.duration (string seconds) and msg.rawData (raw proto). The
+      // outcome / video-flag / subtype fields below are read off rawData
+      // best-effort because wwebjs doesn't document them — they may rename
+      // or disappear on upgrades, and the body-string "missed" check is
+      // locale-dependent.
       if (msg.type === 'call_log') {
-        const d = msg._data || {};
+        const d = msg.rawData || {};
         const callType = d.callType || d.callOutcome || d.subtype || null;
         const isVideo = !!(d.isVideoCall || d.callIsVideo || /video/i.test(callType || ''));
-        // Common subtype values: 'accepted', 'missed', 'rejected', 'declined', 'silenced'.
         const subtype = d.callOutcome
                      || d.subtype
                      || ((msg.body || '').toLowerCase().includes('missed') ? 'missed' : null);
-        const duration = d.callDuration ?? d.duration ?? null;
+        const docDuration = msg.duration != null ? parseInt(msg.duration, 10) : NaN;
+        const rawDuration = d.callDuration ?? d.duration ?? null;
+        const duration = Number.isFinite(docDuration) ? docDuration
+                       : typeof rawDuration === 'number' ? rawDuration
+                       : null;
         try {
           db.recordCall(this.userId, {
             call_id:      entry.wa_id     || null,
@@ -527,7 +534,7 @@ class Session extends EventEmitter {
             is_video:     isVideo,
             is_group:     !!chatInfo.isGroup,
             subtype,
-            duration_sec: typeof duration === 'number' ? duration : null,
+            duration_sec: duration,
             timestamp:    entry.timestamp,
           });
           this.emit('call', { userId: this.userId });
