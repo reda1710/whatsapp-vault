@@ -618,9 +618,12 @@ class Session extends EventEmitter {
     const chat = await this._retry(() => this.client.getChatById(chatId));
 
     let picUrl = null;
-    // Bogus placeholder ids (e.g. '0@c.us' system-author) hang the WA Web JS
-    // call until Puppeteer's protocolTimeout fires — skip the lookup cleanly.
-    if (/^\d+@(c\.us|g\.us)$/.test(chatId)) {
+    // Skip only bogus placeholder ids (e.g. '0@c.us' system-author): a missing
+    // or all-zero user-part hangs the WA Web JS call until Puppeteer's
+    // protocolTimeout fires. Real ids — including legacy hyphenated group ids
+    // and @lid privacy ids — still go through.
+    const userPart = String(chatId || '').split('@')[0];
+    if (userPart && !/^0+$/.test(userPart)) {
       try { picUrl = await this.client.getProfilePicUrl(chatId); }
       catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getProfilePicUrl(${chatId}) failed:`, e.message.split('\n')[0]); }
     }
