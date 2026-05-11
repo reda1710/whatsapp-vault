@@ -462,9 +462,8 @@
   .edit-history-popover {
     position: absolute;
     z-index: 100;
-    bottom: 100%;
-    right: 0;
-    margin-bottom: 4px;
+    top: 100%;
+    margin-top: 4px;
     background: var(--panel);
     border: 1px solid var(--border2);
     border-radius: 8px;
@@ -481,6 +480,10 @@
   .edit-history-time { font-family: var(--mono); font-size: 10px; color: var(--muted); }
   .edit-history-prev { text-decoration: line-through; color: var(--muted); margin-top: 2px; }
   .edit-history-new  { color: var(--text); margin-top: 2px; }
+
+  /* Anchor the popover to the same side as the bubble itself. */
+  .msg-wrap.me   .edit-history-popover { right: 0; left: auto; }
+  .msg-wrap.them .edit-history-popover { left: 0;  right: auto; }
 
   /* ── Reactions ──────────────────────────────────── */
   .reactions-row {
