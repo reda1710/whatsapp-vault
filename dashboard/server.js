@@ -232,13 +232,31 @@ app.get('/api/chats/:chatId/messages', (req, res) => {
 });
 
 // ── Contact profile ───────────────────────────────────────────────────────────
+// Enrich a profile row's participants array with each member's latest
+// pic_filename + name (from chat_profile_versions). Mutates and returns the
+// row. Cheap: a single batched SELECT regardless of group size.
+function enrichGroupParticipants(row, userId) {
+  if (!row || !row.participants) return row;
+  let arr;
+  try { arr = JSON.parse(row.participants); }
+  catch { return row; }
+  if (!Array.isArray(arr) || arr.length === 0) return row;
+  const ids = arr.map(p => p?.id).filter(Boolean);
+  const profiles = db.getLatestProfilesForChatIds(userId, ids);
+  row.participants = JSON.stringify(arr.map(p => {
+    const prof = profiles.get(p.id);
+    return { ...p, pic_filename: prof?.pic_filename || null, name: prof?.name || null };
+  }));
+  return row;
+}
+
 // Latest stored snapshot. No WhatsApp call.
 app.get('/api/chats/:chatId/profile', (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
     const chatId = decodeURIComponent(req.params.chatId);
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    res.json(db.getLatestProfile(userId, chatId));
+    res.json(enrichGroupParticipants(db.getLatestProfile(userId, chatId), userId));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -252,7 +270,7 @@ app.post('/api/chats/:chatId/profile/refresh', async (req, res) => {
     const session = manager.getSession(userId);
     if (!session?.client) return res.status(503).json({ error: 'Session offline' });
     const row = await session.refreshProfile(chatId);
-    res.json(row);
+    res.json(enrichGroupParticipants(row, userId));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -262,7 +280,9 @@ app.get('/api/chats/:chatId/profile/history', (req, res) => {
     const userId = parseInt(req.query.userId, 10);
     const chatId = decodeURIComponent(req.params.chatId);
     if (!userId) return res.status(400).json({ error: 'userId required' });
-    res.json(db.getProfileHistory(userId, chatId));
+    const rows = db.getProfileHistory(userId, chatId);
+    for (const r of rows) enrichGroupParticipants(r, userId);
+    res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

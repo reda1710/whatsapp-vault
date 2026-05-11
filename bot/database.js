@@ -493,6 +493,24 @@ module.exports = {
   getGlobalStats:     () => stmts.getGlobalStats.get(),
   getLatestProfile:   (userId, chatId) => stmts.getLatestProfile.get(userId, chatId) || null,
   getProfileHistory:  (userId, chatId) => stmts.getProfileHistory.all(userId, chatId),
+  // Batch-fetch the latest row per chat_id for a set of ids. Uses MAX(id) to
+  // pick the newest row per group (id is monotonic so this is unambiguous).
+  // Returns Map<chatId, { pic_filename, name }>.
+  getLatestProfilesForChatIds: (userId, chatIds) => {
+    if (!Array.isArray(chatIds) || chatIds.length === 0) return new Map();
+    const placeholders = chatIds.map(() => '?').join(',');
+    const rows = db.prepare(`
+      SELECT chat_id, pic_filename, name FROM chat_profile_versions
+      WHERE id IN (
+        SELECT MAX(id) FROM chat_profile_versions
+        WHERE user_id = ? AND chat_id IN (${placeholders})
+        GROUP BY chat_id
+      )
+    `).all(userId, ...chatIds);
+    const map = new Map();
+    for (const r of rows) map.set(r.chat_id, r);
+    return map;
+  },
   getMediaPath:       (filename) => path.join(MEDIA_DIR, path.basename(filename)),
   getMimetypeForFile: (filename) => stmts.getMimetypeForFile.get(filename)?.mimetype || null,
 };

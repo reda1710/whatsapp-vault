@@ -111,6 +111,32 @@ function onAvatarError(img) {
   img.replaceWith(div);
 }
 
+// Small avatar variant used inside the profile-modal member list. Same
+// onerror → letter-circle fallback as renderAvatar, but a different class so
+// the size doesn't collide with the 38px chat-list / header avatars.
+function renderMemberAvatar(name, picFilename) {
+  const safe = name || '?';
+  const [bg, fg] = avatarColor(safe);
+  if (picFilename) {
+    return `<img class="member-avatar"
+              src="${API}/media/${encodeURIComponent(picFilename)}?key=${encodeURIComponent(apiKey)}"
+              data-name="${escAttr(safe)}"
+              onerror="onMemberAvatarError(this)">`;
+  }
+  return `<div class="member-avatar member-avatar-fallback" style="background:${bg};color:${fg}">${esc(initials(safe))}</div>`;
+}
+
+function onMemberAvatarError(img) {
+  const name = img.getAttribute('data-name') || '?';
+  const [bg, fg] = avatarColor(name);
+  const div = document.createElement('div');
+  div.className = 'member-avatar member-avatar-fallback';
+  div.style.background = bg;
+  div.style.color = fg;
+  div.textContent = initials(name);
+  img.replaceWith(div);
+}
+
 // Replace the chat-header avatar element in place — preserves the #chat-avatar
 // id so subsequent updates (and the inline click handler on the header) keep
 // working regardless of whether the avatar is currently an img or a div.
@@ -1446,7 +1472,12 @@ function paintProfile(p) {
       const tag = m.isSuperAdmin ? ' <span class="participant-tag">owner</span>'
                 : m.isAdmin      ? ' <span class="participant-tag">admin</span>'
                 : '';
-      return `<button class="participant member-btn" onclick="openMemberProfile('${escAttr(m.id)}')">${esc(formatPhone(m.number, m.id))}${tag}</button>`;
+      const phone = formatPhone(m.number, m.id);
+      const avatarName = m.name || phone || m.id;
+      return `<button class="participant member-btn" onclick="openMemberProfile('${escAttr(m.id)}')">
+        ${renderMemberAvatar(avatarName, m.pic_filename)}
+        <span class="member-phone">${esc(phone)}</span>${tag}
+      </button>`;
     }).join('');
     rows.push(['Members', `<div class="participant-list">${items}</div>`]);
   }

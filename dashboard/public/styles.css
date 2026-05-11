@@ -1065,15 +1065,32 @@
     color: var(--text);
     font-family: var(--mono);
     font-size: 12px;
-    padding: 4px 0;
+    padding: 6px 0;
     border-bottom: 1px dashed var(--border);
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     transition: color .12s;
   }
   .member-btn:last-child { border-bottom: none; }
   .member-btn:hover { color: var(--accent); }
+  .member-phone { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .member-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--border2);
+  }
+  .member-avatar-fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
 
   /* Back navigation button (top-left of modal, hidden by default) */
   .profile-back-btn {
