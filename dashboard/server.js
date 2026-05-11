@@ -88,11 +88,15 @@ function broadcast(event, data) {
 }
 
 // Wire manager events → SSE broadcast
-manager.on('qr',         data => broadcast('qr',         data));
-manager.on('ready',      data => broadcast('ready',      data));
-manager.on('status',     data => broadcast('status',     data));
-manager.on('message',    data => broadcast('message',    data));
-manager.on('qr_timeout', data => broadcast('qr_timeout', data));
+manager.on('qr',              data => broadcast('qr',              data));
+manager.on('ready',           data => broadcast('ready',           data));
+manager.on('status',          data => broadcast('status',          data));
+manager.on('message',         data => broadcast('message',         data));
+manager.on('qr_timeout',      data => broadcast('qr_timeout',      data));
+manager.on('message_edit',    data => broadcast('message_edit',    data));
+manager.on('message_revoke',  data => broadcast('message_revoke',  data));
+manager.on('reaction',        data => broadcast('reaction',        data));
+manager.on('vote_update',     data => broadcast('vote_update',     data));
 
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type',  'text/event-stream');
@@ -228,6 +232,56 @@ app.get('/api/chats/:chatId/messages', (req, res) => {
     const offset = parseInt(req.query.offset || '0', 10);
     if (!userId) return res.status(400).json({ error: 'userId required' });
     res.json(db.getMessages(userId, decodeURIComponent(req.params.chatId), limit, offset));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Per-message edit history — for the "· edited" affordance in the chat view.
+app.get('/api/messages/:id/edits', (req, res) => {
+  try {
+    const userId    = parseInt(req.query.userId, 10);
+    const messageId = parseInt(req.params.id, 10);
+    if (!userId || !messageId) return res.status(400).json({ error: 'userId + id required' });
+    res.json(db.getEditHistory(userId, messageId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Live poll tally — voter ids + their selected option indices.
+app.get('/api/polls/:waId/votes', (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId, 10);
+    const waId   = decodeURIComponent(req.params.waId);
+    if (!userId || !waId) return res.status(400).json({ error: 'userId + waId required' });
+    res.json(db.getPollVotes(userId, waId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Call log — newest first.
+app.get('/api/calls', (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId, 10);
+    const limit  = parseInt(req.query.limit || '100', 10);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    res.json(db.getCalls(userId, limit));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Per-chat group event log (joins/leaves/admin changes/etc) — for inline display.
+app.get('/api/chats/:chatId/group-events', (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId, 10);
+    const chatId = decodeURIComponent(req.params.chatId);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    res.json(db.getGroupEventsForChat(userId, chatId));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Per-contact migration history — surfaced in the profile modal of the new id.
+app.get('/api/contacts/:id/changes', (req, res) => {
+  try {
+    const userId    = parseInt(req.query.userId, 10);
+    const contactId = decodeURIComponent(req.params.id);
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    res.json(db.getContactChanges(userId, contactId));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

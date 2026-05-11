@@ -128,6 +128,16 @@ class Session extends EventEmitter {
         dataPath:  AUTH_BASE,
         clientId:  `session-${this.userId}`,
       }),
+      // Cache the WA Web bundle locally so a transient CDN blip during boot
+      // doesn't strand the session on an unloadable build.
+      webVersionCache: { type: 'local' },
+      // Optional: pin to a known-good WA Web build if upgrades start breaking.
+      // webVersion: '2.3000.x',
+      //
+      // Uncomment to let the bot reclaim the session if the user opens WA Web
+      // in another tab (instead of disconnecting). Pair with takeoverTimeoutMs.
+      // takeoverOnConflict: true,
+      // takeoverTimeoutMs: 10_000,
       puppeteer: {
         executablePath: CHROME_BIN,
         headless: true,
@@ -259,6 +269,107 @@ class Session extends EventEmitter {
     client.on('message',        msg => { if (isActive()) this._handleMessage(msg); });
     client.on('message_create', msg => { if (isActive() && msg.fromMe) this._handleMessage(msg); });
 
+    // Edits + revokes — both events arrive after the original message is
+    // archived. recordEdit/recordRevoke are idempotent and no-op if the
+    // message wasn't captured (e.g. arrived before the bot was started).
+    client.on('message_edit', (msg, newBody, prevBody) => {
+      if (!isActive()) return;
+      const waId = msg?.id?.id || null;
+      if (!waId) return;
+      try {
+        const r = db.recordEdit(this.userId, waId, prevBody, newBody, msg.timestamp || Math.floor(Date.now()/1000));
+        if (r.found) this.emit('message_edit', { userId: this.userId, waId, newBody, prevBody });
+      } catch (e) { console.warn(`⚠️  [${this.userName}] edit capture failed:`, e.message.split('\n')[0]); }
+    });
+
+    client.on('message_revoke_everyone', (after, before) => {
+      if (!isActive()) return;
+      const waId = before?.id?.id || after?.id?.id || null;
+      if (!waId) return;
+      try {
+        const r = db.recordRevoke(this.userId, waId, Math.floor(Date.now()/1000));
+        if (r.found) this.emit('message_revoke', { userId: this.userId, waId });
+      } catch (e) { console.warn(`⚠️  [${this.userName}] revoke capture failed:`, e.message.split('\n')[0]); }
+    });
+
+    // Reactions: payload shape is `{ id, msgId, senderId, reaction, timestamp, ... }`.
+    // `reaction === ''` means the user removed their reaction; we still upsert
+    // so the row reflects the current state.
+    client.on('message_reaction', r => {
+      if (!isActive() || !r) return;
+      const msgWaId = r.msgId?.id || r.msgId?._serialized?.split('_').pop() || null;
+      const senderId = r.senderId || (r.id?.fromMe ? 'me' : r.id?.remote) || null;
+      if (!msgWaId || !senderId) return;
+      try {
+        db.recordReaction(this.userId, msgWaId, senderId, r.reaction || '', r.timestamp);
+        this.emit('reaction', { userId: this.userId, msgWaId });
+      } catch (e) { console.warn(`⚠️  [${this.userName}] reaction capture failed:`, e.message.split('\n')[0]); }
+    });
+
+    // Acks: latest delivery state (-1=err, 0=pending, 1=server, 2=device, 3=read, 4=played).
+    // Updates are cheap (single UPDATE) and high-frequency for popular chats.
+    client.on('message_ack', (msg, ack) => {
+      if (!isActive()) return;
+      const waId = msg?.id?.id || null;
+      if (!waId) return;
+      try { db.recordAck(this.userId, waId, ack); }
+      catch (e) { /* swallow — ack churn isn't worth log noise */ }
+    });
+
+    // Poll votes: payload is a `PollVote` { voter, selectedOptions, parentMsgKey, ... }.
+    client.on('vote_update', vote => {
+      if (!isActive() || !vote) return;
+      const pollWaId = vote.parentMsgKey?.id || vote.parentMessage?.id?.id || null;
+      const voterId  = vote.voter || null;
+      if (!pollWaId || !voterId) return;
+      try {
+        db.recordPollVote(this.userId, pollWaId, voterId, vote.selectedOptions || [], vote.interractedAtTs || Math.floor(Date.now()/1000));
+        this.emit('vote_update', { userId: this.userId, pollWaId });
+      } catch (e) { console.warn(`⚠️  [${this.userName}] vote capture failed:`, e.message.split('\n')[0]); }
+    });
+
+    // Incoming calls — log only; WA Web doesn't expose call answering.
+    client.on('incoming_call', call => {
+      if (!isActive() || !call) return;
+      try {
+        db.recordCall(this.userId, {
+          call_id:   call.id   || null,
+          peer_id:   call.from || null,
+          is_video:  !!call.isVideo,
+          is_group:  !!call.isGroup,
+          timestamp: call.timestamp || Math.floor(Date.now()/1000),
+        });
+      } catch (e) { console.warn(`⚠️  [${this.userName}] call capture failed:`, e.message.split('\n')[0]); }
+    });
+
+    // Group churn — joins, leaves, subject/desc updates, admin promotions,
+    // and pending join requests. All reuse the same notification shape.
+    const onGroupNotif = (type) => (n) => {
+      if (!isActive() || !n) return;
+      try {
+        db.recordGroupEvent(this.userId, {
+          chat_id:    n.chatId || n.id?.remote || null,
+          event_type: type,
+          actor_id:   n.author || n.id?.participant || null,
+          target_ids: Array.isArray(n.recipientIds) ? n.recipientIds : null,
+          body:       n.body || null,
+          timestamp:  n.timestamp || Math.floor(Date.now()/1000),
+        });
+      } catch (e) { console.warn(`⚠️  [${this.userName}] group_${type} capture failed:`, e.message.split('\n')[0]); }
+    };
+    client.on('group_join',                onGroupNotif('join'));
+    client.on('group_leave',               onGroupNotif('leave'));
+    client.on('group_update',              onGroupNotif('update'));
+    client.on('group_admin_changed',       onGroupNotif('admin_change'));
+    client.on('group_membership_request',  onGroupNotif('membership_request'));
+
+    // Contact migrated to a new WA number. Persist for the new id's profile.
+    client.on('contact_changed', (msg, oldId, newId, isContact) => {
+      if (!isActive()) return;
+      try { db.recordContactChange(this.userId, oldId, newId, isContact, msg?.timestamp); }
+      catch (e) { console.warn(`⚠️  [${this.userName}] contact_changed capture failed:`, e.message.split('\n')[0]); }
+    });
+
     console.log(`🚀 [${this.userName}] Starting...\n`);
     try {
       await client.initialize();
@@ -339,16 +450,29 @@ class Session extends EventEmitter {
       const sender = contact?.pushname || contact?.name || contact?.number || msg.from?.split('@')[0] || 'Unknown';
 
       const entry = {
-        wa_id:     msg.id?.id || null,
-        chat_id:   chat.id._serialized,
-        from_me:   msg.fromMe,
+        wa_id:         msg.id?.id          || null,
+        wa_serialized: msg.id?._serialized || null,
+        chat_id:       chat.id._serialized,
+        from_me:       msg.fromMe,
         sender,
-        body:      msg.body      || null,
-        type:      msg.type,
-        timestamp: msg.timestamp,
+        body:          msg.body            || null,
+        type:          msg.type,
+        timestamp:     msg.timestamp,
         mediaData: null, mimetype: null,
-        lat:       msg.location?.latitude  || null,
-        lng:       msg.location?.longitude || null,
+        lat:           msg.location?.latitude  || null,
+        lng:           msg.location?.longitude || null,
+        // quotedStanzaID is the bare id of the parent message; cross-references
+        // the wa_id column. wwebjs exposes it on the underlying _data proto.
+        quoted_wa_id:  msg.hasQuotedMsg ? (msg._data?.quotedStanzaID || null) : null,
+        mentions:      (msg.mentionedIds && msg.mentionedIds.length) ? JSON.stringify(msg.mentionedIds) : null,
+        is_forwarded:  msg.isForwarded ? 1 : 0,
+        forward_score: msg.forwardingScore || null,
+        is_ephemeral:  msg.isEphemeral ? 1 : 0,
+        is_status:     msg.isStatus ? 1 : 0,
+        vcards:        (msg.vCards && msg.vCards.length) ? JSON.stringify(msg.vCards) : null,
+        loc_name:      msg.location?.name        || msg.location?.options?.name    || null,
+        loc_address:   msg.location?.address     || msg.location?.options?.address || null,
+        loc_url:       msg.location?.url         || msg.location?.options?.url     || null,
       };
       const chatInfo = { name: chat.name || sender, isGroup: chat.isGroup };
 
@@ -369,6 +493,12 @@ class Session extends EventEmitter {
       // This can happen when WhatsApp's CDN is slow to propagate media.
       if (msg.hasMedia && !mediaFile && messageId) {
         this._enqueueLateMediaFetch(msg, messageId, chatInfo);
+      }
+      // Poll creation: stash the option strings so the dashboard can render
+      // a tally. Vote events arrive separately via vote_update.
+      if (msg.type === 'poll_creation' && entry.wa_id) {
+        const opts = (msg.pollOptions || msg.options || []).map(o => o?.name || o?.localId?.toString() || String(o));
+        if (opts.length) db.recordPollOptions(this.userId, entry.wa_id, opts);
       }
       const ICONS = { chat:'💬',ptt:'🎙️',audio:'🎵',image:'🖼️',video:'🎬',document:'📄',sticker:'🎭',location:'📍',vcard:'👤' };
       console.log(`${ICONS[msg.type]||'📨'} [${this.userName}/${chatInfo.name}] ${sender}: ${(entry.body||'<'+msg.type+'>').substring(0,60)}${mediaFile?' [saved]':''}`);
@@ -448,10 +578,15 @@ class Session extends EventEmitter {
     const chat = await this._retry(() => this.client.getChatById(chatId));
 
     let picUrl = null;
-    try { picUrl = await this.client.getProfilePicUrl(chatId); }
-    catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getProfilePicUrl(${chatId}) failed:`, e.message.split('\n')[0]); }
+    // Bogus placeholder ids (e.g. '0@c.us' system-author) hang the WA Web JS
+    // call until Puppeteer's protocolTimeout fires — skip the lookup cleanly.
+    if (/^\d+@(c\.us|g\.us)$/.test(chatId)) {
+      try { picUrl = await this.client.getProfilePicUrl(chatId); }
+      catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] getProfilePicUrl(${chatId}) failed:`, e.message.split('\n')[0]); }
+    }
 
     let about = null, description = null, isBusiness = false, phone = null, participants = null;
+    let pushname = null, shortName = null, businessProfile = null;
     if (chat.isGroup) {
       description = chat.description || chat.groupMetadata?.desc || null;
       const raw = chat.participants || chat.groupMetadata?.participants;
@@ -485,6 +620,11 @@ class Session extends EventEmitter {
       try {
         const contact = await chat.getContact();
         isBusiness = !!contact?.isBusiness;
+        pushname   = contact?.pushname  || null;
+        shortName  = contact?.shortName || null;
+        // BusinessContact.businessProfile carries catalog/business metadata
+        // (address, hours, websites, vertical). Stash whatever's there.
+        if (contact?.businessProfile) businessProfile = contact.businessProfile;
         // getFormattedNumber() does a real WA API lookup — it returns the actual
         // phone (e.g. "+1 (234) 5678-901") regardless of id format, so use it first.
         // contact.number for @lid contacts returns the lid user-part (NOT a
@@ -508,7 +648,7 @@ class Session extends EventEmitter {
     let picBytes = null;
     if (picUrl) {
       try { picBytes = await downloadBuffer(picUrl); }
-      catch (e) { console.warn(`⚠️  [${this.userName}] profile-pic download failed:`, e.message); }
+      catch (e) { console.warn(`⚠️  [${this.userName}] profile-pic download failed:`, e.code || e.errno || e.message || String(e)); }
     }
 
     return db.saveProfileVersion(this.userId, chatId, {
@@ -519,6 +659,9 @@ class Session extends EventEmitter {
       description,
       isBusiness,
       participants,
+      pushname,
+      shortName,
+      businessProfile,
     });
   }
 
@@ -626,11 +769,15 @@ class SessionManager extends EventEmitter {
       this.sessions.set(userId, session);
 
       // Bubble up events to the manager
-      session.on('qr',         e => this.emit('qr',         e));
-      session.on('ready',      e => this.emit('ready',      e));
-      session.on('status',     e => this.emit('status',     e));
-      session.on('message',    e => this.emit('message',    e));
-      session.on('qr_timeout', e => this.emit('qr_timeout', e));
+      session.on('qr',              e => this.emit('qr',              e));
+      session.on('ready',           e => this.emit('ready',           e));
+      session.on('status',          e => this.emit('status',          e));
+      session.on('message',         e => this.emit('message',         e));
+      session.on('qr_timeout',      e => this.emit('qr_timeout',      e));
+      session.on('message_edit',    e => this.emit('message_edit',    e));
+      session.on('message_revoke',  e => this.emit('message_revoke',  e));
+      session.on('reaction',        e => this.emit('reaction',        e));
+      session.on('vote_update',     e => this.emit('vote_update',     e));
     }
     session.start(); // async — don't await, returns immediately
     return session;

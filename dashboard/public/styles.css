@@ -396,6 +396,156 @@
     margin-top: 3px;
   }
 
+  /* ── Quoted reply, forwarded tag, mentions, vcard, location ─── */
+  .quoted-banner {
+    border-left: 3px solid var(--accent);
+    background: rgba(255,255,255,0.04);
+    padding: 5px 9px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    max-width: 100%;
+  }
+  .quoted-banner:hover { background: rgba(255,255,255,0.07); }
+  .quoted-sender { font-size: 10px; color: var(--accent); font-weight: 600; }
+  .quoted-preview { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .forwarded-tag {
+    font-size: 10px;
+    color: var(--muted);
+    font-style: italic;
+    margin-bottom: 2px;
+  }
+
+  .mention {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .vcard-bubble .vcard-row { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+  .vcard-bubble .vcard-tel { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .vcard-bubble .vcard-icon { font-size: 16px; }
+
+  .loc-bubble .loc-title { font-weight: 500; }
+  .loc-bubble .loc-addr  { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .loc-bubble .loc-url   { font-size: 11px; margin-top: 3px; }
+  .loc-bubble .loc-url a { color: var(--accent); }
+  .loc-bubble .loc-coords{ font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+  .msg-flash { animation: msgFlash 1.2s ease-out; }
+  @keyframes msgFlash {
+    0%   { background: rgba(37, 211, 102, 0.18); }
+    100% { background: transparent; }
+  }
+
+  /* ── Edits + revokes ──────────────────────────────── */
+  .revoked-tag {
+    font-size: 11px;
+    color: var(--muted);
+    font-style: italic;
+    margin-bottom: 4px;
+  }
+  .msg-wrap.revoked .bubble,
+  .msg-wrap.revoked .vcard-bubble,
+  .msg-wrap.revoked .loc-bubble {
+    opacity: 0.65;
+    text-decoration: line-through;
+    text-decoration-color: rgba(255,255,255,0.25);
+  }
+  .edited-tag {
+    font-style: italic;
+    cursor: pointer;
+    opacity: 0.75;
+  }
+  .edited-tag:hover { opacity: 1; color: var(--accent); }
+
+  .edit-history-popover {
+    position: absolute;
+    z-index: 100;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 4px;
+    background: var(--panel);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-width: 220px;
+    max-width: 320px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    font-size: 12px;
+    color: var(--text);
+  }
+  .edit-history-title { font-weight: 600; font-size: 11px; color: var(--accent); margin-bottom: 6px; }
+  .edit-history-item { padding: 4px 0; border-top: 1px solid var(--border); }
+  .edit-history-item:first-of-type { border-top: none; }
+  .edit-history-time { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .edit-history-prev { text-decoration: line-through; color: var(--muted); margin-top: 2px; }
+  .edit-history-new  { color: var(--text); margin-top: 2px; }
+
+  /* ── Reactions ──────────────────────────────────── */
+  .reactions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .reaction-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  /* ── Acks (read receipts) ────────────────────────── */
+  .ack-tag { font-family: monospace; margin-left: 4px; }
+  .ack-1, .ack-2 { color: var(--muted); }
+  .ack-3 { color: #4fc3f7; }     /* blue ticks */
+  .ack-4 { color: var(--accent); }
+  .ack--1 { color: #e57373; }    /* error */
+
+  /* ── Polls ──────────────────────────────────────── */
+  .poll-bubble { padding: 12px 14px; min-width: 220px; }
+  .poll-title  { font-weight: 600; margin-bottom: 8px; }
+  .poll-option { margin-top: 6px; }
+  .poll-option-bar {
+    background: rgba(255,255,255,0.08);
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 3px;
+  }
+  .poll-option-fill {
+    height: 100%;
+    background: var(--accent);
+    width: 0;
+    transition: width .3s;
+  }
+  .poll-option-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .poll-option-count { font-family: var(--mono); color: var(--muted); }
+
+  /* ── Group events / contact changes (profile modal) ─── */
+  .group-events-list, .contact-changes-list { display: flex; flex-direction: column; gap: 4px; }
+  .group-event {
+    font-size: 12px;
+    color: var(--text);
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .group-event:last-child { border-bottom: none; }
+  .group-event-time { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-right: 6px; }
+  .contact-change { font-size: 12px; color: var(--text); padding: 2px 0; }
+  .contact-change .muted { color: var(--muted); font-size: 11px; }
+
   /* ── Voice note ──────────────────────────────────── */
   .voice-bubble {
     display: flex;

@@ -7,5 +7,6 @@ vault.db-shm
 media/
 *.log
 .env
-.claude/settings.local.json
+.claude/
 plan.txt
+WWEBJS_REFERENCE.md

@@ -377,9 +377,9 @@ async function reloadCurrentChatMessages() {
   }
   hasMoreMsgs = more;
 
-  const oldIds = allMessages.map(m => m.id).join(',');
-  const newIds = page.map(m => m.id).join(',');
-  if (oldIds === newIds) return;
+  const oldFps = allMessages.map(msgFingerprint).join(',');
+  const newFps = page.map(msgFingerprint).join(',');
+  if (oldFps === newFps) return;
 
   const filtered = (currentFilter === 'all') ? page : page.filter(m => m.type === currentFilter);
   const wasNearBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
@@ -397,14 +397,33 @@ async function reloadCurrentChatMessages() {
     if (!isMsg || !keepIds.has(parseInt(node.dataset.id, 10))) node.remove();
   }
 
+  // Save allMessages to the new page BEFORE walking, so renderMessage's
+  // quoted-banner lookup (which scans allMessages) sees the fresh data.
+  allMessages = page;
+
   let cursor = box.firstElementChild;
   for (const m of filtered) {
+    const want = msgFingerprint(m);
     if (cursor && parseInt(cursor.dataset.id, 10) === m.id) {
-      cursor = cursor.nextElementSibling;
+      if (cursor.dataset.fp !== want) {
+        // Same message, content changed (edit / revoke / late media) — swap in
+        // a freshly-rendered bubble at this exact position.
+        const tmp = document.createElement('div');
+        tmp.innerHTML = renderMessage(m);
+        const fresh = tmp.firstElementChild;
+        fresh.dataset.fp = want;
+        const next = cursor.nextElementSibling;
+        cursor.replaceWith(fresh);
+        cursor = next;
+      } else {
+        cursor = cursor.nextElementSibling;
+      }
     } else {
       const tmp = document.createElement('div');
       tmp.innerHTML = renderMessage(m);
-      box.insertBefore(tmp.firstElementChild, cursor);
+      const fresh = tmp.firstElementChild;
+      fresh.dataset.fp = want;
+      box.insertBefore(fresh, cursor);
     }
   }
 
@@ -416,10 +435,16 @@ async function reloadCurrentChatMessages() {
        </div>`);
   }
 
-  allMessages = page;
   loadedCount = page.length;
 
   if (wasNearBottom) box.scrollTop = box.scrollHeight;
+}
+
+// Fields whose change requires re-rendering a message bubble. Keep this in
+// sync with reloadCurrentChatMessages's diff-render so initial-load and
+// background-poll renders agree on what counts as "unchanged".
+function msgFingerprint(m) {
+  return `${m.id}:${m.body || ''}:${m.edited_at || 0}:${m.revoked_at || 0}:${m.media_file || ''}:${m.ack || 0}:${m.reactions || ''}`;
 }
 
 function renderMessages() {
@@ -440,6 +465,12 @@ function renderMessages() {
        </div>`
     : '';
   box.innerHTML = loadMoreBtn + msgs.map(renderMessage).join('');
+  // Stamp data-fp on each freshly-rendered bubble so the next diff-render
+  // tick can tell which (if any) need to be replaced.
+  for (const node of box.querySelectorAll('.msg-wrap[data-id]')) {
+    const m = msgs.find(x => x.id === parseInt(node.dataset.id, 10));
+    if (m) node.dataset.fp = msgFingerprint(m);
+  }
 }
 
 function renderMessage(m) {
@@ -447,7 +478,22 @@ function renderMessage(m) {
   const checked = selectedIds.has(m.id) ? ' checked' : '';
   const senderLine = !m.from_me
     ? `<div class="msg-sender">${esc(m.sender || 'Unknown')}</div>` : '';
-  const timeLine = `<div class="msg-meta">${fmtFull(m.timestamp)}</div>`;
+
+  // Edit + revoke affordances on the meta line. Edited messages show a
+  // clickable "edited" tag that opens the version history popover.
+  const editTag = m.edited_at
+    ? ` <span class="edited-tag" onclick="event.stopPropagation();showEditHistory(${m.id})">· edited</span>`
+    : '';
+  // Read receipts on outbound messages only (1=server, 2=device, 3=read, 4=played).
+  const ackTag = (m.from_me && m.ack)
+    ? ` <span class="ack-tag ack-${m.ack}">${ackIcon(m.ack)}</span>`
+    : '';
+  const timeLine = `<div class="msg-meta">${fmtFull(m.timestamp)}${editTag}${ackTag}</div>`;
+
+  const quotedBanner    = m.quoted_wa_id ? renderQuotedBanner(findQuotedMessage(m.quoted_wa_id)) : '';
+  const forwardedTag    = m.is_forwarded ? `<div class="forwarded-tag">↪ Forwarded</div>` : '';
+  const revokedTag      = m.revoked_at   ? `<div class="revoked-tag">🚫 Deleted by sender</div>` : '';
+  const reactionsRow    = m.reactions    ? renderReactionsRow(m.reactions) : '';
 
   let content = '';
   if (m.type === 'ptt' || m.type === 'audio') {
@@ -460,21 +506,204 @@ function renderMessage(m) {
   } else if (m.type === 'document') {
     content = renderDoc(m);
   } else if (m.type === 'location') {
-    content = `<div class="bubble">📍 Location (${m.lat?.toFixed(4)}, ${m.lng?.toFixed(4)})</div>`;
+    content = renderLocation(m);
   } else if (m.type === 'vcard') {
-    content = `<div class="bubble">👤 Contact card${m.body ? ': ' + esc(m.body.substring(0, 80)) : ''}</div>`;
+    content = renderVcard(m);
+  } else if (m.type === 'poll_creation') {
+    content = renderPoll(m);
   } else {
-    content = `<div class="bubble">${esc(m.body || '')}</div>`;
+    content = `<div class="bubble">${highlightMentions(m.body || '', m.mentions)}</div>`;
   }
 
   // Checkbox (visible in select mode) + per-message delete (visible on hover in normal mode)
   const checkbox = `<div class="msg-check" onclick="event.stopPropagation();toggleMsgSelect(${m.id})"></div>`;
   const delBtn   = `<button class="msg-del-btn" onclick="event.stopPropagation();confirmDeleteOne(${m.id})">🗑</button>`;
 
-  return `<div class="msg-wrap ${side}${checked}" data-id="${m.id}" onclick="handleMsgClick(${m.id})">
+  const wrapCls = `msg-wrap ${side}${checked}${m.revoked_at ? ' revoked' : ''}`;
+  return `<div class="${wrapCls}" data-id="${m.id}" onclick="handleMsgClick(${m.id})">
     ${checkbox}
-    <div class="msg-row ${side}" style="max-width:100%">${senderLine}${content}${timeLine}</div>
+    <div class="msg-row ${side}" style="max-width:100%">${senderLine}${quotedBanner}${forwardedTag}${revokedTag}${content}${reactionsRow}${timeLine}</div>
     ${delBtn}
+  </div>`;
+}
+
+function ackIcon(ack) {
+  if (ack === 1) return '✓';     // server
+  if (ack === 2) return '✓✓';    // device
+  if (ack === 3) return '✓✓';    // read (blue via CSS)
+  if (ack === 4) return '▶';     // played
+  if (ack === -1) return '⚠';    // error
+  return '';
+}
+
+// Render aggregated reactions as small chips below the bubble.
+function renderReactionsRow(reactionsJson) {
+  let arr;
+  try { arr = JSON.parse(reactionsJson); } catch { return ''; }
+  if (!Array.isArray(arr) || !arr.length) return '';
+  const chips = arr.map(r => `<span class="reaction-chip">${esc(r.emoji)}${r.count > 1 ? ` ${r.count}` : ''}</span>`).join('');
+  return `<div class="reactions-row">${chips}</div>`;
+}
+
+// Poll-creation message — name + option list. Live tally is loaded on demand
+// (one fetch per poll on first render) and rebuilt on vote_update SSE events.
+function renderPoll(m) {
+  let opts = [];
+  try { opts = JSON.parse(m.poll_options || '[]'); } catch {}
+  const lines = opts.map((o, i) => `
+    <div class="poll-option" data-idx="${i}">
+      <div class="poll-option-bar"><div class="poll-option-fill"></div></div>
+      <div class="poll-option-row">
+        <span class="poll-option-label">${esc(o)}</span>
+        <span class="poll-option-count">0</span>
+      </div>
+    </div>
+  `).join('');
+  // Schedule a tally refresh after the bubble is in the DOM.
+  if (m.wa_id) setTimeout(() => refreshPollTally(m.id, m.wa_id, opts.length), 0);
+  return `<div class="bubble poll-bubble" id="poll-${m.id}" data-poll-wa="${escAttr(m.wa_id || '')}" data-poll-opts="${opts.length}">
+    <div class="poll-title">📊 ${esc(m.body || 'Poll')}</div>
+    ${lines}
+  </div>`;
+}
+
+async function refreshPollTally(messageId, pollWaId, optionCount) {
+  if (!pollWaId) return;
+  let votes;
+  try {
+    const r = await apiFetch(`${API}/polls/${encodeURIComponent(pollWaId)}/votes?userId=${currentUserId}`);
+    votes = await r.json();
+  } catch { return; }
+  if (!Array.isArray(votes)) return;
+  const counts = new Array(optionCount).fill(0);
+  for (const v of votes) {
+    let sel;
+    try { sel = JSON.parse(v.selected || '[]'); } catch { continue; }
+    if (Array.isArray(sel)) for (const i of sel) if (counts[i] != null) counts[i]++;
+  }
+  const total = counts.reduce((a, b) => a + b, 0);
+  const bubble = document.getElementById(`poll-${messageId}`);
+  if (!bubble) return;
+  for (const opt of bubble.querySelectorAll('.poll-option')) {
+    const idx = parseInt(opt.dataset.idx, 10);
+    const c   = counts[idx] || 0;
+    const pct = total ? Math.round((c / total) * 100) : 0;
+    opt.querySelector('.poll-option-count').textContent = c;
+    opt.querySelector('.poll-option-fill').style.width = pct + '%';
+  }
+}
+
+// Edit-history popover. Fetches the per-message edit log and shows a small
+// floating panel with each version. Closing is via outside click.
+async function showEditHistory(messageId) {
+  document.querySelectorAll('.edit-history-popover').forEach(el => el.remove());
+  let rows = [];
+  try {
+    const r = await apiFetch(`${API}/messages/${messageId}/edits?userId=${currentUserId}`);
+    rows = await r.json();
+  } catch { return; }
+  if (!Array.isArray(rows) || !rows.length) return;
+  const items = rows.map(r => `
+    <div class="edit-history-item">
+      <div class="edit-history-time">${esc(fmtFull(r.edited_at))}</div>
+      ${r.prev_body ? `<div class="edit-history-prev">${esc(r.prev_body)}</div>` : ''}
+      <div class="edit-history-new">${esc(r.new_body || '')}</div>
+    </div>
+  `).join('');
+  const wrap = document.querySelector(`.msg-wrap[data-id="${messageId}"]`);
+  if (!wrap) return;
+  const pop = document.createElement('div');
+  pop.className = 'edit-history-popover';
+  pop.innerHTML = `<div class="edit-history-title">Edit history</div>${items}`;
+  wrap.appendChild(pop);
+  setTimeout(() => {
+    const off = e => { if (!pop.contains(e.target)) { pop.remove(); document.removeEventListener('click', off); } };
+    document.addEventListener('click', off);
+  }, 0);
+}
+
+// Quoted-reply preview banner — shown above the bubble when this message
+// replies to another. Returns empty if the parent isn't currently loaded.
+function findQuotedMessage(quotedWaId) {
+  if (!quotedWaId) return null;
+  return allMessages.find(m => m.wa_id === quotedWaId) || null;
+}
+function renderQuotedBanner(quoted) {
+  if (!quoted) return '';
+  const sender = quoted.from_me ? 'You' : (quoted.sender || 'Unknown');
+  let preview;
+  if (quoted.type === 'image' || quoted.type === 'sticker') preview = '🖼 Photo';
+  else if (quoted.type === 'video')                          preview = '🎬 Video';
+  else if (quoted.type === 'ptt' || quoted.type === 'audio') preview = '🎙️ Voice message';
+  else if (quoted.type === 'document')                       preview = '📄 ' + (quoted.filename || 'Document');
+  else if (quoted.type === 'location')                       preview = '📍 Location';
+  else if (quoted.type === 'vcard')                          preview = '👤 Contact card';
+  else                                                       preview = (quoted.body || '').substring(0, 80);
+  return `<div class="quoted-banner" onclick="event.stopPropagation();scrollToMessage(${quoted.id})">
+    <div class="quoted-sender">${esc(sender)}</div>
+    <div class="quoted-preview">${esc(preview)}</div>
+  </div>`;
+}
+function scrollToMessage(id) {
+  const el = document.querySelector(`.msg-wrap[data-id="${id}"]`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('msg-flash');
+  setTimeout(() => el.classList.remove('msg-flash'), 1200);
+}
+
+// Highlight @<number> spans corresponding to mentioned WA contact ids.
+function highlightMentions(body, mentionsJson) {
+  if (!body) return '';
+  if (!mentionsJson) return esc(body);
+  let mentions;
+  try { mentions = JSON.parse(mentionsJson); } catch { return esc(body); }
+  if (!Array.isArray(mentions) || !mentions.length) return esc(body);
+  let html = esc(body);
+  for (const id of mentions) {
+    const num = String(id).split('@')[0];
+    if (!/^\d+$/.test(num)) continue;
+    html = html.replace(new RegExp('@' + num + '(?!\\d)', 'g'), `<span class="mention">@${num}</span>`);
+  }
+  return html;
+}
+
+// Pull FN: and TEL: from the first vCard so we can render structured info
+// instead of raw card text. Falls back to body if parsing fails.
+function renderVcard(m) {
+  let parsed = null;
+  if (m.vcards) {
+    try {
+      const arr = JSON.parse(m.vcards);
+      const raw = Array.isArray(arr) ? arr[0] : null;
+      if (raw) {
+        const fn  = (raw.match(/^FN:(.+)$/m) || [])[1];
+        const tel = (raw.match(/^TEL[^:]*:(.+)$/m) || [])[1];
+        parsed = { name: (fn || '').trim(), tel: (tel || '').trim() };
+      }
+    } catch {}
+  }
+  if (parsed && (parsed.name || parsed.tel)) {
+    const name = parsed.name || (m.body || '').trim();
+    return `<div class="bubble vcard-bubble">
+      <div class="vcard-row"><span class="vcard-icon">👤</span> ${esc(name || 'Contact')}</div>
+      ${parsed.tel ? `<div class="vcard-tel">${esc(parsed.tel)}</div>` : ''}
+    </div>`;
+  }
+  return `<div class="bubble">👤 Contact card${m.body ? ': ' + esc(m.body.substring(0, 80)) : ''}</div>`;
+}
+
+// Location bubble that surfaces name/address/url when wwebjs gave them to us.
+function renderLocation(m) {
+  const hasMeta = m.loc_name || m.loc_address || m.loc_url;
+  const lat = (m.lat != null) ? Number(m.lat).toFixed(4) : '?';
+  const lng = (m.lng != null) ? Number(m.lng).toFixed(4) : '?';
+  if (!hasMeta) return `<div class="bubble">📍 Location (${lat}, ${lng})</div>`;
+  return `<div class="bubble loc-bubble">
+    <div class="loc-title">📍 ${esc(m.loc_name || 'Location')}</div>
+    ${m.loc_address ? `<div class="loc-addr">${esc(m.loc_address)}</div>` : ''}
+    ${m.loc_url ? `<div class="loc-url"><a href="${escAttr(m.loc_url)}" target="_blank" rel="noopener noreferrer">${esc(m.loc_url)}</a></div>` : ''}
+    <div class="loc-coords">${lat}, ${lng}</div>
   </div>`;
 }
 
@@ -1264,6 +1493,35 @@ function connectSSE() {
     }
   });
 
+  sseSource.addEventListener('message_edit', async e => {
+    const { userId } = JSON.parse(e.data);
+    if (userId === currentUserId) await reloadCurrentChatMessages();
+  });
+
+  sseSource.addEventListener('message_revoke', async e => {
+    const { userId } = JSON.parse(e.data);
+    if (userId === currentUserId) await reloadCurrentChatMessages();
+  });
+
+  // Reactions are part of msgFingerprint — a chat reload picks them up via
+  // the diff-render. No per-bubble surgical update needed.
+  sseSource.addEventListener('reaction', async e => {
+    const { userId } = JSON.parse(e.data);
+    if (userId === currentUserId) await reloadCurrentChatMessages();
+  });
+
+  // Vote updates only affect poll bubbles. Re-fetch the tally for any
+  // visible poll bubble with that wa_id; no full chat reload needed.
+  sseSource.addEventListener('vote_update', e => {
+    const { userId, pollWaId } = JSON.parse(e.data);
+    if (userId !== currentUserId || !pollWaId) return;
+    const bubble = document.querySelector(`.poll-bubble[data-poll-wa="${pollWaId}"]`);
+    if (!bubble) return;
+    const messageId  = parseInt(bubble.id.replace('poll-', ''), 10);
+    const optionCount = parseInt(bubble.dataset.pollOpts || '0', 10);
+    refreshPollTally(messageId, pollWaId, optionCount);
+  });
+
   sseSource.onerror = () => {
     // Reconnect after 5s on error
     setTimeout(connectSSE, 5000);
@@ -1316,6 +1574,7 @@ async function openProfileModal(chatId) {
     cached = await r.json();
     currentLatestProfile = cached;
     paintProfile(cached);
+    decorateProfileExtras(chatId);
   } catch {
     document.getElementById('profile-fields').innerHTML = '<div class="empty"><h3>Failed to load profile</h3></div>';
   }
@@ -1484,6 +1743,13 @@ function paintProfile(p) {
   const rows = [];
   if (p && p.about)       rows.push(['About',        esc(p.about)]);
   if (p && p.description) rows.push(['Description',  esc(p.description)]);
+  // Pushname (what they call themselves on WA) — only show if it differs from
+  // the name we already have at the top.
+  if (p && p.pushname && p.pushname !== name) rows.push(['Pushname', esc(p.pushname)]);
+  if (p && p.business_profile) {
+    const html = renderBusinessProfile(p.business_profile);
+    if (html) rows.push(['Business', html]);
+  }
   if (isGroup && participants) {
     const items = participants.map(m => {
       const tag = m.isSuperAdmin ? ' <span class="participant-tag">owner</span>'
@@ -1503,6 +1769,91 @@ function paintProfile(p) {
   document.getElementById('profile-fields').innerHTML = rows.length
     ? rows.map(([k, v]) => `<div class="profile-field"><div class="profile-field-key">${esc(k)}</div><div class="profile-field-val">${v}</div></div>`).join('')
     : '<div class="profile-field profile-field-empty">No additional info available.</div>';
+}
+
+// Best-effort rendering of WA's business profile blob — surfaces address,
+// email, websites, vertical, and hours when present, ignores fields we
+// don't recognize. Returns '' if the JSON is empty or unparseable.
+function renderBusinessProfile(json) {
+  let bp;
+  try { bp = JSON.parse(json); } catch { return ''; }
+  if (!bp || typeof bp !== 'object') return '';
+  const lines = [];
+  const addr = [bp.address, bp.city, bp.state, bp.zip].filter(Boolean).join(', ');
+  if (addr)        lines.push(`<div>📍 ${esc(addr)}</div>`);
+  if (bp.email)    lines.push(`<div>✉️ ${esc(bp.email)}</div>`);
+  if (Array.isArray(bp.website)) {
+    for (const w of bp.website) lines.push(`<div>🔗 <a href="${escAttr(w)}" target="_blank" rel="noopener noreferrer">${esc(w)}</a></div>`);
+  } else if (typeof bp.website === 'string' && bp.website) {
+    lines.push(`<div>🔗 <a href="${escAttr(bp.website)}" target="_blank" rel="noopener noreferrer">${esc(bp.website)}</a></div>`);
+  }
+  if (bp.vertical) lines.push(`<div>🏷 ${esc(bp.vertical)}</div>`);
+  if (bp.description) lines.push(`<div>${esc(bp.description)}</div>`);
+  return lines.join('') || '';
+}
+
+// Append "Previously / Recent activity" rows to the profile-fields list
+// after the main profile has painted. Both fetches run in parallel and any
+// failure is silent — these are decorative, not load-blocking.
+async function decorateProfileExtras(chatId) {
+  if (!chatId || profileModalChatId !== chatId) return;
+  const isGroup = chatId.endsWith('@g.us');
+  try {
+    if (isGroup) {
+      const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/group-events?userId=${currentUserId}`);
+      const events = await r.json();
+      if (profileModalChatId !== chatId) return;
+      appendProfileExtraRow('Recent activity', renderGroupEventsList(events));
+    } else {
+      const r = await apiFetch(`${API}/contacts/${encodeURIComponent(chatId)}/changes?userId=${currentUserId}`);
+      const changes = await r.json();
+      if (profileModalChatId !== chatId) return;
+      appendProfileExtraRow('Previously', renderContactChangesList(changes));
+    }
+  } catch { /* silent — extras are optional */ }
+}
+
+function appendProfileExtraRow(key, valHtml) {
+  if (!valHtml) return;
+  const fields = document.getElementById('profile-fields');
+  if (!fields) return;
+  const row = document.createElement('div');
+  row.className = 'profile-field';
+  row.innerHTML = `<div class="profile-field-key">${esc(key)}</div><div class="profile-field-val">${valHtml}</div>`;
+  fields.appendChild(row);
+}
+
+function renderGroupEventsList(events) {
+  if (!Array.isArray(events) || !events.length) return '';
+  // Newest first, cap at 20 — older history is in the DB if needed.
+  const recent = events.slice(-20).reverse();
+  return `<div class="group-events-list">${recent.map(e => {
+    const label = describeGroupEvent(e);
+    return `<div class="group-event"><span class="group-event-time">${esc(fmtFull(e.timestamp))}</span> ${label}</div>`;
+  }).join('')}</div>`;
+}
+
+function describeGroupEvent(e) {
+  const actor = e.actor_id ? esc(e.actor_id.split('@')[0]) : 'Someone';
+  let targets = [];
+  try { targets = JSON.parse(e.target_ids || '[]').map(t => t.split('@')[0]); } catch {}
+  const targetStr = targets.length ? esc(targets.join(', ')) : '';
+  switch (e.event_type) {
+    case 'join':              return targetStr ? `${actor} added ${targetStr}` : `${actor} joined`;
+    case 'leave':             return targetStr ? `${actor} removed ${targetStr}` : `${actor} left`;
+    case 'admin_change':      return `${actor} changed admins${targetStr ? ': ' + targetStr : ''}`;
+    case 'update':            return `${actor} updated the group${e.body ? ': ' + esc(e.body.substring(0, 60)) : ''}`;
+    case 'membership_request':return `${actor} requested to join`;
+    default:                  return `${actor} · ${esc(e.event_type)}`;
+  }
+}
+
+function renderContactChangesList(changes) {
+  if (!Array.isArray(changes) || !changes.length) return '';
+  return `<div class="contact-changes-list">${changes.map(c => {
+    const oldNum = (c.old_id || '').split('@')[0];
+    return `<div class="contact-change">+${esc(oldNum)} <span class="muted">· ${esc(fmtFull(c.timestamp))}</span></div>`;
+  }).join('')}</div>`;
 }
 
 function onProfilePicError(img) {

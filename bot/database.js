@@ -104,6 +104,99 @@ function ensureColumn(table, column, type) {
 ensureColumn('chat_profile_versions', 'participants', 'TEXT');
 ensureColumn('chat_profile_versions', 'phone',        'TEXT');
 
+// Phase-2 additions: capture data the bot already receives but discarded.
+ensureColumn('messages', 'wa_serialized',  'TEXT');
+ensureColumn('messages', 'quoted_wa_id',   'TEXT');
+ensureColumn('messages', 'mentions',       'TEXT');
+ensureColumn('messages', 'is_forwarded',   'INTEGER DEFAULT 0');
+ensureColumn('messages', 'forward_score',  'INTEGER');
+ensureColumn('messages', 'is_ephemeral',   'INTEGER DEFAULT 0');
+ensureColumn('messages', 'is_status',      'INTEGER DEFAULT 0');
+ensureColumn('messages', 'vcards',         'TEXT');
+ensureColumn('messages', 'loc_name',       'TEXT');
+ensureColumn('messages', 'loc_address',    'TEXT');
+ensureColumn('messages', 'loc_url',        'TEXT');
+
+ensureColumn('chat_profile_versions', 'pushname',         'TEXT');
+ensureColumn('chat_profile_versions', 'short_name',       'TEXT');
+ensureColumn('chat_profile_versions', 'business_profile', 'TEXT');
+
+// Phase-3 additions: edits + revokes.
+ensureColumn('messages', 'edited_at',  'INTEGER');
+ensureColumn('messages', 'revoked_at', 'INTEGER');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS message_edits (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    prev_body   TEXT,
+    new_body    TEXT,
+    edited_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_edits_msg ON message_edits(message_id);
+
+  CREATE TABLE IF NOT EXISTS reactions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    msg_wa_id   TEXT    NOT NULL,
+    sender_id   TEXT    NOT NULL,
+    emoji       TEXT,
+    timestamp   INTEGER NOT NULL,
+    UNIQUE(user_id, msg_wa_id, sender_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(user_id, msg_wa_id);
+
+  CREATE TABLE IF NOT EXISTS poll_votes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    poll_wa_id  TEXT    NOT NULL,
+    voter_id    TEXT    NOT NULL,
+    selected    TEXT,
+    timestamp   INTEGER NOT NULL,
+    UNIQUE(user_id, poll_wa_id, voter_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes(user_id, poll_wa_id);
+
+  CREATE TABLE IF NOT EXISTS calls (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    call_id     TEXT,
+    peer_id     TEXT,
+    is_video    INTEGER DEFAULT 0,
+    is_group    INTEGER DEFAULT 0,
+    timestamp   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, timestamp DESC);
+
+  CREATE TABLE IF NOT EXISTS group_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    chat_id     TEXT    NOT NULL,
+    event_type  TEXT    NOT NULL,
+    actor_id    TEXT,
+    target_ids  TEXT,
+    body        TEXT,
+    timestamp   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_group_events_chat ON group_events(user_id, chat_id, timestamp);
+
+  CREATE TABLE IF NOT EXISTS contact_changes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    old_id      TEXT    NOT NULL,
+    new_id      TEXT    NOT NULL,
+    is_contact  INTEGER,
+    timestamp   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_contact_changes_new ON contact_changes(user_id, new_id);
+`);
+
+// Phase-4b: latest ack code on each message (1=server, 2=device, 3=read, 4=played).
+ensureColumn('messages', 'ack', 'INTEGER');
+// Phase-4c: poll-creation messages carry their option list.
+ensureColumn('messages', 'poll_options', 'TEXT');
+
 // ── Prepared statements ──────────────────────────────────────────────────────
 const stmts = {
   insertUser:    db.prepare(`INSERT INTO users (name) VALUES (?) RETURNING *`),
@@ -114,9 +207,15 @@ const stmts = {
 
   insertMessage: db.prepare(`
     INSERT OR IGNORE INTO messages
-      (user_id, wa_id, chat_id, chat_name, from_me, sender, body, type, timestamp, media_file, mimetype, filename, lat, lng)
+      (user_id, wa_id, wa_serialized, chat_id, chat_name, from_me, sender, body, type, timestamp,
+       media_file, mimetype, filename, lat, lng,
+       quoted_wa_id, mentions, is_forwarded, forward_score, is_ephemeral, is_status, vcards,
+       loc_name, loc_address, loc_url)
     VALUES
-      (@user_id, @wa_id, @chat_id, @chat_name, @from_me, @sender, @body, @type, @timestamp, @media_file, @mimetype, @filename, @lat, @lng)
+      (@user_id, @wa_id, @wa_serialized, @chat_id, @chat_name, @from_me, @sender, @body, @type, @timestamp,
+       @media_file, @mimetype, @filename, @lat, @lng,
+       @quoted_wa_id, @mentions, @is_forwarded, @forward_score, @is_ephemeral, @is_status, @vcards,
+       @loc_name, @loc_address, @loc_url)
   `),
 
   upsertChat: db.prepare(`
@@ -157,9 +256,11 @@ const stmts = {
 
   insertProfileVersion: db.prepare(`
     INSERT INTO chat_profile_versions
-      (user_id, chat_id, pic_filename, pic_hash, name, phone, about, description, is_business, participants)
+      (user_id, chat_id, pic_filename, pic_hash, name, phone, about, description, is_business, participants,
+       pushname, short_name, business_profile)
     VALUES
-      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @phone, @about, @description, @is_business, @participants)
+      (@user_id, @chat_id, @pic_filename, @pic_hash, @name, @phone, @about, @description, @is_business, @participants,
+       @pushname, @short_name, @business_profile)
   `),
 
   deleteChatProfileHistory: db.prepare(`
@@ -209,6 +310,74 @@ const stmts = {
   getBotStatus: db.prepare(`SELECT state, beat_at FROM bot_status WHERE id = 1`),
 
   getMimetypeForFile: db.prepare(`SELECT mimetype FROM messages WHERE media_file = ? LIMIT 1`),
+
+  // Edits + revokes (Phase 3)
+  findMessageByWaId: db.prepare(`SELECT id, body FROM messages WHERE user_id = ? AND wa_id = ? LIMIT 1`),
+  insertMessageEdit: db.prepare(`
+    INSERT INTO message_edits (user_id, message_id, prev_body, new_body, edited_at)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  updateMessageBody: db.prepare(`UPDATE messages SET body = ?, edited_at = ? WHERE id = ?`),
+  markMessageRevoked: db.prepare(`UPDATE messages SET revoked_at = ? WHERE user_id = ? AND wa_id = ?`),
+  getEditsForMessage: db.prepare(`
+    SELECT prev_body, new_body, edited_at FROM message_edits
+    WHERE message_id = ? ORDER BY edited_at ASC
+  `),
+
+  // Phase 4 — events
+  upsertReaction: db.prepare(`
+    INSERT INTO reactions (user_id, msg_wa_id, sender_id, emoji, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, msg_wa_id, sender_id) DO UPDATE SET
+      emoji = excluded.emoji, timestamp = excluded.timestamp
+  `),
+  // Aggregate non-empty reactions per message (emoji='' counts as removal).
+  getReactionsForChat: db.prepare(`
+    SELECT msg_wa_id, emoji, COUNT(*) AS count
+    FROM reactions
+    WHERE user_id = ? AND msg_wa_id IN (
+      SELECT wa_id FROM messages WHERE user_id = ? AND chat_id = ? AND wa_id IS NOT NULL
+    ) AND emoji IS NOT NULL AND emoji <> ''
+    GROUP BY msg_wa_id, emoji
+  `),
+
+  updateMessageAck: db.prepare(`UPDATE messages SET ack = ? WHERE user_id = ? AND wa_id = ?`),
+
+  setPollOptions: db.prepare(`UPDATE messages SET poll_options = ? WHERE id = ?`),
+  upsertPollVote: db.prepare(`
+    INSERT INTO poll_votes (user_id, poll_wa_id, voter_id, selected, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, poll_wa_id, voter_id) DO UPDATE SET
+      selected = excluded.selected, timestamp = excluded.timestamp
+  `),
+  getPollVotes: db.prepare(`
+    SELECT voter_id, selected, timestamp FROM poll_votes
+    WHERE user_id = ? AND poll_wa_id = ?
+  `),
+
+  insertCall: db.prepare(`
+    INSERT INTO calls (user_id, call_id, peer_id, is_video, is_group, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `),
+  getCalls: db.prepare(`
+    SELECT * FROM calls WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?
+  `),
+
+  insertGroupEvent: db.prepare(`
+    INSERT INTO group_events (user_id, chat_id, event_type, actor_id, target_ids, body, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  getGroupEventsForChat: db.prepare(`
+    SELECT * FROM group_events WHERE user_id = ? AND chat_id = ? ORDER BY timestamp ASC
+  `),
+
+  insertContactChange: db.prepare(`
+    INSERT INTO contact_changes (user_id, old_id, new_id, is_contact, timestamp)
+    VALUES (?, ?, ?, ?, ?)
+  `),
+  getContactChangesFor: db.prepare(`
+    SELECT * FROM contact_changes WHERE user_id = ? AND (new_id = ? OR old_id = ?) ORDER BY timestamp DESC
+  `),
 };
 
 // ── Users ────────────────────────────────────────────────────────────────────
@@ -289,20 +458,31 @@ function saveMessage(userId, msg, chatInfo) {
     mediaFile = filename;
 
     const result = stmts.insertMessage.run({
-      user_id:    userId,
-      wa_id:      msg.wa_id     || null,
-      chat_id:    msg.chat_id,
-      chat_name:  chatInfo.name || msg.chat_id,
-      from_me:    msg.from_me   ? 1 : 0,
-      sender:     msg.sender    || null,
-      body:       msg.body      || null,
-      type:       msg.type      || 'chat',
-      timestamp:  msg.timestamp || Math.floor(Date.now() / 1000),
-      media_file: mediaFile,
-      mimetype:   msg.mimetype  || null,
-      filename:   filename,
-      lat:        msg.lat       || null,
-      lng:        msg.lng       || null,
+      user_id:       userId,
+      wa_id:         msg.wa_id        || null,
+      wa_serialized: msg.wa_serialized || null,
+      chat_id:       msg.chat_id,
+      chat_name:     chatInfo.name    || msg.chat_id,
+      from_me:       msg.from_me      ? 1 : 0,
+      sender:        msg.sender       || null,
+      body:          msg.body         || null,
+      type:          msg.type         || 'chat',
+      timestamp:     msg.timestamp    || Math.floor(Date.now() / 1000),
+      media_file:    mediaFile,
+      mimetype:      msg.mimetype     || null,
+      filename:      filename,
+      lat:           msg.lat          || null,
+      lng:           msg.lng          || null,
+      quoted_wa_id:  msg.quoted_wa_id || null,
+      mentions:      msg.mentions     || null,
+      is_forwarded:  msg.is_forwarded ? 1 : 0,
+      forward_score: msg.forward_score || null,
+      is_ephemeral:  msg.is_ephemeral ? 1 : 0,
+      is_status:     msg.is_status    ? 1 : 0,
+      vcards:        msg.vcards       || null,
+      loc_name:      msg.loc_name     || null,
+      loc_address:   msg.loc_address  || null,
+      loc_url:       msg.loc_url      || null,
     });
         insertedId = result.lastInsertRowid;
 
@@ -399,7 +579,7 @@ function deleteChat(userId, chatId) {
 // Append-only timeline of contact/group profile snapshots. The session manager
 // downloads the bytes; we hash, dedupe, and persist. If nothing changed since
 // the last snapshot we return the existing row — no new file, no new DB row.
-function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, description, isBusiness, participants }) {
+function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, description, isBusiness, participants, pushname, shortName, businessProfile }) {
   const picHash = picBytes ? crypto.createHash('sha256').update(picBytes).digest('hex') : null;
 
   const safeChat = String(chatId).replace(/[@.]/g, '_');
@@ -423,15 +603,22 @@ function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, desc
     participantsJson = JSON.stringify(canon);
   }
 
+  const businessProfileJson = businessProfile
+    ? (typeof businessProfile === 'string' ? businessProfile : JSON.stringify(businessProfile))
+    : null;
+
   const latest = stmts.getLatestProfile.get(userId, chatId);
   const same = latest
-    && (latest.pic_hash     || null) === picHash
-    && (latest.name         || null) === (name        || null)
-    && (latest.phone        || null) === (phone       || null)
-    && (latest.about        || null) === (about       || null)
-    && (latest.description  || null) === (description || null)
-    && !!latest.is_business          === !!isBusiness
-    && (latest.participants || null) === participantsJson;
+    && (latest.pic_hash         || null) === picHash
+    && (latest.name             || null) === (name        || null)
+    && (latest.phone            || null) === (phone       || null)
+    && (latest.about            || null) === (about       || null)
+    && (latest.description      || null) === (description || null)
+    && !!latest.is_business              === !!isBusiness
+    && (latest.participants     || null) === participantsJson
+    && (latest.pushname         || null) === (pushname    || null)
+    && (latest.short_name       || null) === (shortName   || null)
+    && (latest.business_profile || null) === businessProfileJson;
   if (same) return latest;
 
   if (picBytes && picFilename) {
@@ -440,18 +627,119 @@ function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, desc
   }
 
   stmts.insertProfileVersion.run({
-    user_id:      userId,
-    chat_id:      chatId,
-    pic_filename: picFilename,
-    pic_hash:     picHash,
-    name:         name        || null,
-    phone:        phone       || null,
-    about:        about       || null,
-    description:  description || null,
-    is_business:  isBusiness ? 1 : 0,
-    participants: participantsJson,
+    user_id:          userId,
+    chat_id:          chatId,
+    pic_filename:     picFilename,
+    pic_hash:         picHash,
+    name:             name        || null,
+    phone:            phone       || null,
+    about:            about       || null,
+    description:      description || null,
+    is_business:      isBusiness ? 1 : 0,
+    participants:     participantsJson,
+    pushname:         pushname    || null,
+    short_name:       shortName   || null,
+    business_profile: businessProfileJson,
   });
   return stmts.getLatestProfile.get(userId, chatId);
+}
+
+// ── Edits + revokes (Phase 3) ────────────────────────────────────────────────
+// Both events arrive after the original message is already archived. We append
+// to a history table AND mutate the live row so the chat view reflects the
+// latest state without an extra join. Revokes do NOT clear the body — the
+// vault is the canonical record of what was sent.
+function recordEdit(userId, waId, prevBody, newBody, editedAt) {
+  if (!waId) return { found: false };
+  const row = stmts.findMessageByWaId.get(userId, waId);
+  if (!row) return { found: false };
+  const ts = editedAt || Math.floor(Date.now() / 1000);
+  db.transaction(() => {
+    stmts.insertMessageEdit.run(userId, row.id, prevBody ?? row.body ?? null, newBody ?? null, ts);
+    stmts.updateMessageBody.run(newBody ?? null, ts, row.id);
+  })();
+  return { found: true, messageId: row.id };
+}
+
+function recordRevoke(userId, waId, revokedAt) {
+  if (!waId) return { found: false };
+  const ts = revokedAt || Math.floor(Date.now() / 1000);
+  const r = stmts.markMessageRevoked.run(ts, userId, waId);
+  return { found: r.changes > 0 };
+}
+
+function getEditHistory(userId, messageId) {
+  // userId is for authorization at the API layer; we still scope by message_id.
+  // Confirm ownership before returning.
+  const owns = db.prepare('SELECT 1 FROM messages WHERE id = ? AND user_id = ?').get(messageId, userId);
+  if (!owns) return [];
+  return stmts.getEditsForMessage.all(messageId);
+}
+
+// ── Phase 4 capture functions ────────────────────────────────────────────────
+function recordReaction(userId, msgWaId, senderId, emoji, timestamp) {
+  if (!msgWaId || !senderId) return;
+  stmts.upsertReaction.run(userId, msgWaId, senderId, emoji ?? '', timestamp || Math.floor(Date.now()/1000));
+}
+
+// Returns Map<msg_wa_id, [{emoji, count}]> for a chat — used by getMessages.
+function getReactionsForChat(userId, chatId) {
+  const rows = stmts.getReactionsForChat.all(userId, userId, chatId);
+  const out = new Map();
+  for (const r of rows) {
+    if (!out.has(r.msg_wa_id)) out.set(r.msg_wa_id, []);
+    out.get(r.msg_wa_id).push({ emoji: r.emoji, count: r.count });
+  }
+  return out;
+}
+
+function recordAck(userId, waId, ack) {
+  if (!waId || ack == null) return;
+  stmts.updateMessageAck.run(ack, userId, waId);
+}
+
+function recordPollOptions(userId, waId, options) {
+  if (!waId || !Array.isArray(options) || !options.length) return;
+  const row = stmts.findMessageByWaId.get(userId, waId);
+  if (!row) return;
+  stmts.setPollOptions.run(JSON.stringify(options), row.id);
+}
+
+function recordPollVote(userId, pollWaId, voterId, selected, timestamp) {
+  if (!pollWaId || !voterId) return;
+  const sel = Array.isArray(selected) ? JSON.stringify(selected) : (selected || null);
+  stmts.upsertPollVote.run(userId, pollWaId, voterId, sel, timestamp || Math.floor(Date.now()/1000));
+}
+
+function getPollVotes(userId, pollWaId) {
+  return stmts.getPollVotes.all(userId, pollWaId);
+}
+
+function recordCall(userId, { call_id, peer_id, is_video, is_group, timestamp }) {
+  stmts.insertCall.run(userId, call_id || null, peer_id || null, is_video ? 1 : 0, is_group ? 1 : 0, timestamp || Math.floor(Date.now()/1000));
+}
+
+function getCalls(userId, limit = 100) {
+  return stmts.getCalls.all(userId, limit);
+}
+
+function recordGroupEvent(userId, { chat_id, event_type, actor_id, target_ids, body, timestamp }) {
+  if (!chat_id || !event_type) return;
+  const targets = Array.isArray(target_ids) ? JSON.stringify(target_ids) : (target_ids || null);
+  stmts.insertGroupEvent.run(userId, chat_id, event_type, actor_id || null, targets, body || null, timestamp || Math.floor(Date.now()/1000));
+}
+
+function getGroupEventsForChat(userId, chatId) {
+  return stmts.getGroupEventsForChat.all(userId, chatId);
+}
+
+function recordContactChange(userId, oldId, newId, isContact, timestamp) {
+  if (!oldId || !newId) return;
+  stmts.insertContactChange.run(userId, oldId, newId, isContact ? 1 : 0, timestamp || Math.floor(Date.now()/1000));
+}
+
+function getContactChanges(userId, contactId) {
+  return stmts.getContactChangesFor.all(userId, contactId, contactId);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -484,10 +772,28 @@ function getExtension(mime) {
 module.exports = {
   createUser, updateUser, getAllUsers, deleteUser,
   saveMessage, attachMediaToMessage, deleteMessages, deleteChat,
+  recordEdit, recordRevoke, getEditHistory,
+  recordReaction, getReactionsForChat,
+  recordAck,
+  recordPollOptions, recordPollVote, getPollVotes,
+  recordCall, getCalls,
+  recordGroupEvent, getGroupEventsForChat,
+  recordContactChange, getContactChanges,
   setBotOnline, setBotOffline, getBotStatus,
   saveProfileVersion,
   getChats:           (userId) => stmts.getChats.all(userId),
-  getMessages:        (userId, chatId, limit = 100, offset = 0) => stmts.getMessages.all(userId, chatId, limit, offset),
+  // Pull messages + attach aggregated reactions per row. The reactions
+  // sub-fetch is one extra indexed query per chat — cheap.
+  getMessages:        (userId, chatId, limit = 100, offset = 0) => {
+    const rows = stmts.getMessages.all(userId, chatId, limit, offset);
+    const reactionMap = getReactionsForChat(userId, chatId);
+    for (const r of rows) {
+      if (r.wa_id && reactionMap.has(r.wa_id)) {
+        r.reactions = JSON.stringify(reactionMap.get(r.wa_id));
+      }
+    }
+    return rows;
+  },
   searchMessages:     (userId, q) => stmts.searchMessages.all(userId, '%' + q + '%'),
   getStats:           (userId) => stmts.getStats.get(userId, userId, userId, userId, userId),
   getGlobalStats:     () => stmts.getGlobalStats.get(),
