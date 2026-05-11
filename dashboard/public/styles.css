@@ -874,7 +874,6 @@
   .chat-item:hover .del-chat-btn { display: flex; }
   .del-chat-btn:hover { color: var(--coral); background: rgba(255,107,107,.1); }
 
-  /* Select toggle button */
   .filter-btn.select-toggle { margin-left: auto; }
   .filter-btn.select-toggle.active { background: var(--amber); border-color: var(--amber); color: #000; }
 
@@ -923,16 +922,14 @@
   }
   .btn-danger:hover { background: rgba(255,107,107,.2); border-color: var(--coral); }
 
-  /* Per-message wrapper in select mode */
   .msg-wrap {
     display: flex;
-    align-items: center;   /* center delete button vertically with the bubble */
+    align-items: center;
     gap: 8px;
     position: relative;
   }
   .msg-wrap.me { flex-direction: row-reverse; }
 
-  /* Checkbox */
   .msg-check {
     width: 18px;
     height: 18px;
@@ -962,7 +959,7 @@
     transform: rotate(40deg) translateY(-1px);
   }
 
-  /* Delete button per message (hover, non-select mode) — sits next to the bubble */
+  /* Hover-only on non-select mode. */
   .msg-del-btn {
     display: none;
     align-items: center;
@@ -978,20 +975,18 @@
     transition: color .15s, border-color .15s;
     white-space: nowrap;
   }
-  /* Incoming: sender line above bubble pads top, so center alignment lands on bubble */
+  /* Incoming has a sender line above the bubble; outgoing doesn't, so the
+     button needs to anchor to the top to line up with the bubble. */
   .msg-wrap.them .msg-del-btn { align-self: center; }
-  /* Outgoing: no sender line — bubble is at the top, anchor button to top with margin */
   .msg-wrap.me   .msg-del-btn { align-self: flex-start; margin-top: 12px; }
   .msg-wrap:hover .msg-del-btn { display: inline-flex; }
   .select-mode .msg-del-btn { display: none !important; }
   .msg-del-btn:hover { color: var(--coral); border-color: var(--coral); }
 
-  /* Highlight selected messages */
   .select-mode .msg-wrap { cursor: pointer; border-radius: 8px; padding: 2px 4px; margin: 0 -4px; }
   .select-mode .msg-wrap:hover { background: rgba(255,255,255,.03); }
   .select-mode .msg-wrap.checked { background: rgba(37,211,102,.06); }
 
-  /* Confirm modal */
   .modal-overlay {
     display: none;
     position: fixed;
@@ -1163,9 +1158,8 @@
     border-top: 1px solid var(--border);
     padding-top: 10px;
   }
-  /* Author display:flex above outranks the UA [hidden]→display:none rule, so
-     state it explicitly. Without this, toggling .hidden flips the button label
-     but the panel stays open. */
+  /* display:flex above outranks the UA [hidden]→display:none rule —
+     restate it so toggling .hidden actually hides the panel. */
   .profile-history[hidden] { display: none; }
   .history-row {
     display: flex;

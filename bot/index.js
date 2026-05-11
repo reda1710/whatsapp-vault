@@ -1,10 +1,8 @@
 'use strict';
 
-// ── Single-process entry point ──────────────────────────────────────────────
-// We run the bot and the dashboard in ONE Node process so they share the same
-// SessionManager instance (PM2 with two separate apps would create two managers
-// fighting over the same Chrome session folders, plus the dashboard server
-// would never receive bot events because they live in different processes).
+// Bot and dashboard run in one Node process so they share the same
+// SessionManager. Two PM2 apps would fight over the Chrome session folders
+// and split the event bus.
 
 const fs = require('fs');
 const path = require('path');
@@ -31,7 +29,6 @@ const manager = new SessionManager();
 require('./manager-instance').setManager(manager);
 module.exports = { manager };
 
-// Boot the dashboard server in the same process
 require('../dashboard/server');
 
 function logRam() {
@@ -50,7 +47,6 @@ function logRam() {
   console.log(`🧠 RAM — node: ${nodeMB} MB  chrome: ${chromeMB} MB  total: ${totalMB} MB\n`);
 }
 
-// Start all existing sessions (after the dashboard is listening)
 manager.startAll().catch(e => console.error('Startup error:', e));
 const ramInterval = setInterval(logRam, 300_000);
 

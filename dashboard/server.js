@@ -5,7 +5,7 @@ const cors     = require('cors');
 const path     = require('path');
 const fs       = require('fs');
 const db = require('../bot/database');
-// Get the manager from the shared instance module (avoids circular require with bot/index)
+// Shared singleton to avoid a circular require with bot/index.
 const { getManager } = require('../bot/manager-instance');
 const manager = getManager();
 
@@ -24,29 +24,27 @@ if (API_KEY === 'REPLACE_WITH_YOUR_OWN_KEY') {
   process.exit(1);
 }
 
-// Log a fingerprint of the key (first 4 + last 4 chars) so you can verify
-// it matches what you typed into the dashboard, without exposing the full key.
+// First 4 + last 4 chars only — enough to verify a mistyped key without
+// dumping the whole secret to logs.
 const keyFingerprint = API_KEY.length >= 12
   ? `${API_KEY.slice(0, 4)}...${API_KEY.slice(-4)} (${API_KEY.length} chars)`
   : '(too short — should be 64 chars)';
 console.log(`🔑 API key loaded: ${keyFingerprint}`);
 
 const app = express();
-// cors({ origin: false }) — intentional: dashboard is always same-origin.
-// For local dev on a different port, change to cors({ origin: 'http://localhost:PORT' })
+// Same-origin only. For cross-origin dev, swap to `{ origin: 'http://localhost:PORT' }`.
 app.use(cors({ origin: false }));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
-    // No build step / asset hashing — disable the browser cache for our
-    // HTML/CSS/JS so deploys don't strand users on stale code.
+    // No asset hashing — disable cache so deploys don't strand users on stale code.
     if (/\.(html|css|js)$/.test(filePath)) res.setHeader('Cache-Control', 'no-store');
   }
 }));
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 app.use('/api', (req, res, next) => {
-  // SSE uses query string key since EventSource can't send custom headers
+  // EventSource can't send custom headers, so SSE falls back to ?key=.
   const key = req.headers['x-api-key'] || req.query.key;
   if (!key || key !== API_KEY) return res.status(401).json({ error: 'Unauthorized' });
   next();
@@ -56,9 +54,9 @@ app.use('/api', (req, res, next) => {
 const sseClients = new Set();
 
 // ── Rate limiting ────────────────────────────────────────────────────────────
-const searchRateLimitMap = new Map(); // userId → [timestamps...]
-const SEARCH_LIMIT = 30; // max searches
-const SEARCH_WINDOW_MS = 60000; // per 60 seconds
+const searchRateLimitMap = new Map(); // userId → timestamps[]
+const SEARCH_LIMIT = 30;
+const SEARCH_WINDOW_MS = 60000;
 
 function checkSearchRateLimit(userId) {
   const now = Date.now();
@@ -70,7 +68,7 @@ function checkSearchRateLimit(userId) {
   return true;
 }
 
-// Purge entries for users who have had no searches in the last window
+// Drop users with no recent searches so the map doesn't grow unbounded.
 setInterval(() => {
   const cutoff = Date.now() - SEARCH_WINDOW_MS;
   for (const [userId, timestamps] of searchRateLimitMap) {
@@ -87,7 +85,6 @@ function broadcast(event, data) {
   for (const c of sseClients) sendSSE(c, event, data);
 }
 
-// Wire manager events → SSE broadcast
 manager.on('qr',              data => broadcast('qr',              data));
 manager.on('ready',           data => broadcast('ready',           data));
 manager.on('status',          data => broadcast('status',          data));
@@ -97,7 +94,6 @@ manager.on('message_edit',    data => broadcast('message_edit',    data));
 manager.on('message_revoke',  data => broadcast('message_revoke',  data));
 manager.on('reaction',        data => broadcast('reaction',        data));
 manager.on('vote_update',     data => broadcast('vote_update',     data));
-manager.on('call',            data => broadcast('call',            data));
 
 app.get('/api/events', (req, res) => {
   res.setHeader('Content-Type',  'text/event-stream');
@@ -105,7 +101,6 @@ app.get('/api/events', (req, res) => {
   res.setHeader('Connection',    'keep-alive');
   res.flushHeaders();
 
-  // Send current user statuses immediately on connect
   const users = db.getAllUsers();
   for (const u of users) {
     sendSSE(res, 'status', { userId: u.id, status: manager.getStatus(u.id) });
@@ -114,7 +109,6 @@ app.get('/api/events', (req, res) => {
   sseClients.add(res);
   req.on('close', () => sseClients.delete(res));
 
-  // Keep-alive ping every 25s
   const ping = setInterval(() => {
     try { res.write(': ping\n\n'); }
     catch (err) { console.warn(`⚠️  SSE ping failed:`, err.message); clearInterval(ping); }
@@ -142,9 +136,8 @@ app.post('/api/users', async (req, res) => {
 });
 
 
-// Lazy reconnect — start Chrome and let WhatsApp Web fire 'qr' or go straight
-// to 'authenticated' (if cached auth is still valid). Used when the user clicks
-// the Reconnect banner for an account in the 'qr' (red dot) state.
+// Lazy reconnect — boots Chrome for an idle session. If cached auth is
+// still valid we skip 'qr' and go straight to 'authenticated'.
 app.post('/api/users/:id/connect', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -154,9 +147,7 @@ app.post('/api/users/:id/connect', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Stop Chrome but keep the user record. Called when the user closes the QR
-// modal without scanning — we want the dropdown dot to stay red ('qr'),
-// not gray ('offline'), so the Reconnect banner remains visible.
+// Stop Chrome but keep the user in 'qr' (red dot) so Reconnect stays up.
 app.post('/api/users/:id/disconnect', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -165,21 +156,18 @@ app.post('/api/users/:id/disconnect', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Cancel a pending QR session — only removes the user if they never authenticated.
-// Safe to call when the user dismisses the QR modal before scanning.
+// Cancel a pending QR — only removes the user if they never authenticated.
 app.post('/api/users/:id/cancel', async (req, res) => {
   try {
     const id      = parseInt(req.params.id, 10);
     const session = manager.getSession(id);
     if (!session) return res.json({ removed: false, reason: 'not_found' });
 
-    // If the session has already authenticated (i.e. this is a reconnect),
-    // just leave it running — the user dismissed the modal but is still tracked.
+    // Already authenticated = reconnect flow; leave the session running.
     if (session.authenticated || session.status === 'online') {
       return res.json({ removed: false, reason: 'already_authenticated' });
     }
 
-    // Brand-new user who never scanned — stop Chrome and clean up.
     await manager.removeUser(id);
     res.json({ removed: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -246,7 +234,6 @@ app.get('/api/messages/:id/edits', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Live poll tally — voter ids + their selected option indices.
 app.get('/api/polls/:waId/votes', (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
@@ -256,17 +243,6 @@ app.get('/api/polls/:waId/votes', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Call log — newest first.
-app.get('/api/calls', (req, res) => {
-  try {
-    const userId = parseInt(req.query.userId, 10);
-    const limit  = parseInt(req.query.limit || '100', 10);
-    if (!userId) return res.status(400).json({ error: 'userId required' });
-    res.json(db.getCalls(userId, limit));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Per-chat group event log (joins/leaves/admin changes/etc) — for inline display.
 app.get('/api/chats/:chatId/group-events', (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
@@ -276,7 +252,6 @@ app.get('/api/chats/:chatId/group-events', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Per-contact migration history — surfaced in the profile modal of the new id.
 app.get('/api/contacts/:id/changes', (req, res) => {
   try {
     const userId    = parseInt(req.query.userId, 10);
@@ -287,9 +262,8 @@ app.get('/api/contacts/:id/changes', (req, res) => {
 });
 
 // ── Contact profile ───────────────────────────────────────────────────────────
-// Enrich a profile row's participants array with each member's latest
-// pic_filename + name (from chat_profile_versions). Mutates and returns the
-// row. Cheap: a single batched SELECT regardless of group size.
+// Attach each member's latest pic + name to the participants array. One
+// batched SELECT regardless of group size.
 function enrichGroupParticipants(row, userId) {
   if (!row || !row.participants) return row;
   let arr;
@@ -305,7 +279,7 @@ function enrichGroupParticipants(row, userId) {
   return row;
 }
 
-// Latest stored snapshot. No WhatsApp call.
+// Cached snapshot only — no WA call.
 app.get('/api/chats/:chatId/profile', (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
@@ -315,8 +289,8 @@ app.get('/api/chats/:chatId/profile', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Active fetch from WhatsApp. Dedupes against the last stored row — only writes
-// a new version (and a new file on disk) if something actually changed.
+// Live WA fetch. saveProfileVersion only writes a new row/file if something
+// actually changed since the last snapshot.
 app.post('/api/chats/:chatId/profile/refresh', async (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
@@ -329,7 +303,6 @@ app.post('/api/chats/:chatId/profile/refresh', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Full version timeline for the modal's history view.
 app.get('/api/chats/:chatId/profile/history', (req, res) => {
   try {
     const userId = parseInt(req.query.userId, 10);
@@ -348,7 +321,6 @@ app.get('/api/search', (req, res) => {
     const q      = (req.query.q || '').trim();
     if (!userId) return res.status(400).json({ error: 'userId required' });
 
-    // Rate limit: max 30 searches per 60s per user
     if (!checkSearchRateLimit(userId)) {
       return res.status(429).json({ error: 'Search rate limit exceeded (30 per 60s)' });
     }
@@ -358,9 +330,9 @@ app.get('/api/search', (req, res) => {
 });
 
 // ── Media ─────────────────────────────────────────────────────────────────────
-// Express's default Content-Type detection mis-maps .ogg as application/ogg
-// and treats some audio files as octet-stream, both of which break <audio>
-// playback in the browser. We set Content-Type explicitly per extension.
+// Express's default mime detection ships .ogg as application/ogg and various
+// audio files as octet-stream — both break <audio> playback. Set Content-Type
+// explicitly per extension.
 const MIME_MAP = {
   '.ogg':  'audio/ogg',
   '.opus': 'audio/ogg',
@@ -381,7 +353,7 @@ app.get('/api/media/:filename', (req, res) => {
   const p = db.getMediaPath(req.params.filename);
   if (!fs.existsSync(p)) return res.status(404).json({ error: 'File not found' });
 
-  // Try DB-stored mimetype first (most accurate), fall back to extension lookup.
+  // DB-stored mimetype is most accurate; fall back to extension lookup.
   let mime = db.getMimetypeForFile(req.params.filename);
   if (mime) mime = String(mime).split(';')[0].trim();
   if (!mime) {
@@ -390,18 +362,16 @@ app.get('/api/media/:filename', (req, res) => {
   }
   if (mime) res.setHeader('Content-Type', mime);
 
-  // Get file size for range support
   const stat = fs.statSync(p);
   const fileSize = stat.size;
 
-  // Handle HTTP range requests (for seeking in media players, resumable downloads)
+  // HTTP range support enables seeking and resumable downloads.
   const range = req.headers.range;
   if (range) {
     const parts = range.replace(/bytes=/, '').split('-');
     const start = parseInt(parts[0], 10);
     const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
 
-    // Validate range
     if (isNaN(start) || start < 0 || end >= fileSize || start > end) {
       res.setHeader('Content-Range', `bytes */${fileSize}`);
       return res.status(416).json({ error: 'Range not satisfiable' });

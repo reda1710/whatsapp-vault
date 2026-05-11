@@ -94,9 +94,8 @@ db.exec(`
     ON chat_profile_versions(user_id, chat_id, fetched_at DESC);
 `);
 
-// Migrations for tables created by earlier versions of this script.
-// SQLite has no `ADD COLUMN IF NOT EXISTS`, so we swallow the duplicate-column
-// error. Idempotent on fresh installs (CREATE TABLE above already has the col).
+// SQLite has no `ADD COLUMN IF NOT EXISTS` — swallow the duplicate-column
+// error to make ALTER idempotent across runs and on fresh installs.
 function ensureColumn(table, column, type) {
   try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`); }
   catch (e) { if (!String(e.message || '').includes('duplicate column')) throw e; }
@@ -104,7 +103,6 @@ function ensureColumn(table, column, type) {
 ensureColumn('chat_profile_versions', 'participants', 'TEXT');
 ensureColumn('chat_profile_versions', 'phone',        'TEXT');
 
-// Phase-2 additions: capture data the bot already receives but discarded.
 ensureColumn('messages', 'wa_serialized',  'TEXT');
 ensureColumn('messages', 'quoted_wa_id',   'TEXT');
 ensureColumn('messages', 'mentions',       'TEXT');
@@ -121,7 +119,6 @@ ensureColumn('chat_profile_versions', 'pushname',         'TEXT');
 ensureColumn('chat_profile_versions', 'short_name',       'TEXT');
 ensureColumn('chat_profile_versions', 'business_profile', 'TEXT');
 
-// Phase-3 additions: edits + revokes.
 ensureColumn('messages', 'edited_at',  'INTEGER');
 ensureColumn('messages', 'revoked_at', 'INTEGER');
 
@@ -158,17 +155,6 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_poll_votes_poll ON poll_votes(user_id, poll_wa_id);
 
-  CREATE TABLE IF NOT EXISTS calls (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    call_id     TEXT,
-    peer_id     TEXT,
-    is_video    INTEGER DEFAULT 0,
-    is_group    INTEGER DEFAULT 0,
-    timestamp   INTEGER NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_calls_user ON calls(user_id, timestamp DESC);
-
   CREATE TABLE IF NOT EXISTS group_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -192,16 +178,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_contact_changes_new ON contact_changes(user_id, new_id);
 `);
 
-// Phase-4b: latest ack code on each message (1=server, 2=device, 3=read, 4=played).
+// 1=server, 2=device, 3=read, 4=played, -1=error.
 ensureColumn('messages', 'ack', 'INTEGER');
-// Phase-4c: poll-creation messages carry their option list.
 ensureColumn('messages', 'poll_options', 'TEXT');
 
-// Calls — direction (from_me), outcome (accepted/missed/rejected), and duration
-// in seconds. Earlier versions only stored incoming calls without these.
-ensureColumn('calls', 'from_me',      'INTEGER DEFAULT 0');
-ensureColumn('calls', 'subtype',      'TEXT');
-ensureColumn('calls', 'duration_sec', 'INTEGER');
+// Call-log metadata (mirrors Call class fields; populated only for type='call_log').
+ensureColumn('messages', 'call_is_video',     'INTEGER');
+ensureColumn('messages', 'call_duration_sec', 'INTEGER');
+ensureColumn('messages', 'call_participants', 'TEXT');
 
 // ── Prepared statements ──────────────────────────────────────────────────────
 const stmts = {
@@ -216,12 +200,14 @@ const stmts = {
       (user_id, wa_id, wa_serialized, chat_id, chat_name, from_me, sender, body, type, timestamp,
        media_file, mimetype, filename, lat, lng,
        quoted_wa_id, mentions, is_forwarded, forward_score, is_ephemeral, is_status, vcards,
-       loc_name, loc_address, loc_url)
+       loc_name, loc_address, loc_url,
+       call_is_video, call_duration_sec, call_participants)
     VALUES
       (@user_id, @wa_id, @wa_serialized, @chat_id, @chat_name, @from_me, @sender, @body, @type, @timestamp,
        @media_file, @mimetype, @filename, @lat, @lng,
        @quoted_wa_id, @mentions, @is_forwarded, @forward_score, @is_ephemeral, @is_status, @vcards,
-       @loc_name, @loc_address, @loc_url)
+       @loc_name, @loc_address, @loc_url,
+       @call_is_video, @call_duration_sec, @call_participants)
   `),
 
   upsertChat: db.prepare(`
@@ -236,8 +222,8 @@ const stmts = {
       updated_at  = strftime('%s','now')
   `),
 
-  // Chat list with the latest profile picture filename joined in via a
-  // correlated subquery (one indexed seek per row using idx_profile_versions_chat).
+  // Joins the latest pic_filename per chat via correlated subquery —
+  // one indexed seek per row through idx_profile_versions_chat.
   getChats: db.prepare(`
     SELECT c.*,
       (SELECT pic_filename FROM chat_profile_versions
@@ -317,8 +303,12 @@ const stmts = {
 
   getMimetypeForFile: db.prepare(`SELECT mimetype FROM messages WHERE media_file = ? LIMIT 1`),
 
-  // Edits + revokes (Phase 3)
   findMessageByWaId: db.prepare(`SELECT id, body FROM messages WHERE user_id = ? AND wa_id = ? LIMIT 1`),
+  // For the sweep's revoke pass — scope to a chat + minimum timestamp.
+  getMessagesInWindow: db.prepare(`
+    SELECT id, wa_id, revoked_at FROM messages
+    WHERE user_id = ? AND chat_id = ? AND timestamp >= ? AND wa_id IS NOT NULL
+  `),
   insertMessageEdit: db.prepare(`
     INSERT INTO message_edits (user_id, message_id, prev_body, new_body, edited_at)
     VALUES (?, ?, ?, ?, ?)
@@ -330,14 +320,13 @@ const stmts = {
     WHERE message_id = ? ORDER BY edited_at ASC
   `),
 
-  // Phase 4 — events
   upsertReaction: db.prepare(`
     INSERT INTO reactions (user_id, msg_wa_id, sender_id, emoji, timestamp)
     VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(user_id, msg_wa_id, sender_id) DO UPDATE SET
       emoji = excluded.emoji, timestamp = excluded.timestamp
   `),
-  // Aggregate non-empty reactions per message (emoji='' counts as removal).
+  // emoji='' = removal — exclude from the count.
   getReactionsForChat: db.prepare(`
     SELECT msg_wa_id, emoji, COUNT(*) AS count
     FROM reactions
@@ -359,31 +348,6 @@ const stmts = {
   getPollVotes: db.prepare(`
     SELECT voter_id, selected, timestamp FROM poll_votes
     WHERE user_id = ? AND poll_wa_id = ?
-  `),
-
-  insertCall: db.prepare(`
-    INSERT INTO calls (user_id, call_id, peer_id, from_me, is_video, is_group, subtype, duration_sec, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `),
-  // Dedupe by call_id when present — wwebjs may surface a call via both the
-  // incoming_call event AND a follow-up call_log message.
-  findCallByCallId: db.prepare(`SELECT id FROM calls WHERE user_id = ? AND call_id = ? LIMIT 1`),
-  // Fallback dedupe for call_log rows that have no stable id — collapse on
-  // (peer, timestamp) within a 5-second window.
-  findRecentCallByPeer: db.prepare(`
-    SELECT id FROM calls WHERE user_id = ? AND peer_id = ?
-      AND ABS(timestamp - ?) <= 5 LIMIT 1
-  `),
-  updateCallFields: db.prepare(`
-    UPDATE calls SET
-      subtype      = COALESCE(?, subtype),
-      duration_sec = COALESCE(?, duration_sec),
-      is_video     = COALESCE(?, is_video),
-      from_me      = COALESCE(?, from_me)
-    WHERE id = ?
-  `),
-  getCalls: db.prepare(`
-    SELECT * FROM calls WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?
   `),
 
   insertGroupEvent: db.prepare(`
@@ -418,8 +382,7 @@ function getAllUsers() {
 }
 
 function deleteUser(id) {
-  // Sweep profile-pic files before the FK cascade wipes the rows that
-  // tell us which files to remove.
+  // Sweep pic files before the FK cascade removes the rows that name them.
   try {
     const pics = stmts.selectProfilePicsForUser.all(id);
     for (const { pic_filename } of pics) {
@@ -428,7 +391,7 @@ function deleteUser(id) {
     }
   } catch (err) { console.warn(`⚠️  Profile pic sweep failed for user ${id}:`, err.message); }
 
-  // CASCADE deletes messages, chats, and chat_profile_versions via FK
+  // FK cascade wipes messages, chats, and chat_profile_versions.
   stmts.deleteUser.run(id);
 }
 
@@ -506,6 +469,9 @@ function saveMessage(userId, msg, chatInfo) {
       loc_name:      msg.loc_name     || null,
       loc_address:   msg.loc_address  || null,
       loc_url:       msg.loc_url      || null,
+      call_is_video:     msg.call_is_video     ?? null,
+      call_duration_sec: msg.call_duration_sec ?? null,
+      call_participants: msg.call_participants || null,
     });
         insertedId = result.lastInsertRowid;
 
@@ -584,8 +550,7 @@ function deleteChat(userId, chatId) {
     }
   });
 
-  // Sweep profile-pic files for this chat (filenames embed the chatId so
-  // there's no overlap with other chats' history).
+  // Pic filenames embed the chatId so there's no overlap with other chats.
   const pics = stmts.selectProfilePicsForChat.all(userId, chatId);
   for (const { pic_filename } of pics) {
     try { fs.unlinkSync(path.join(MEDIA_DIR, pic_filename)); }
@@ -599,19 +564,16 @@ function deleteChat(userId, chatId) {
 }
 
 // ── Profile versions ─────────────────────────────────────────────────────────
-// Append-only timeline of contact/group profile snapshots. The session manager
-// downloads the bytes; we hash, dedupe, and persist. If nothing changed since
-// the last snapshot we return the existing row — no new file, no new DB row.
+// Append-only timeline of profile snapshots. If nothing changed since the
+// last snapshot we return that row instead of writing a duplicate.
 function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, description, isBusiness, participants, pushname, shortName, businessProfile }) {
   const picHash = picBytes ? crypto.createHash('sha256').update(picBytes).digest('hex') : null;
 
   const safeChat = String(chatId).replace(/[@.]/g, '_');
   const picFilename = picBytes ? `${userId}_pic_${safeChat}_${picHash.slice(0, 16)}.jpg` : null;
 
-  // Canonicalize participants for stable dedupe — sort by id so a server-side
-  // reordering doesn't trigger a phantom new version. Each entry carries the
-  // resolved phone number (when available) so privacy-lid ids still display
-  // a real number client-side.
+  // Sort by id so a server-side reorder doesn't trigger a phantom version.
+  // Phone number is kept alongside so @lid ids still display a real number.
   let participantsJson = null;
   if (Array.isArray(participants)) {
     const canon = participants
@@ -667,11 +629,10 @@ function saveProfileVersion(userId, chatId, { picBytes, name, phone, about, desc
   return stmts.getLatestProfile.get(userId, chatId);
 }
 
-// ── Edits + revokes (Phase 3) ────────────────────────────────────────────────
-// Both events arrive after the original message is already archived. We append
-// to a history table AND mutate the live row so the chat view reflects the
-// latest state without an extra join. Revokes do NOT clear the body — the
-// vault is the canonical record of what was sent.
+// ── Edits + revokes ──────────────────────────────────────────────────────────
+// Append to the history table AND mutate the live row so the chat view
+// reflects the latest state without an extra join. Revokes do NOT clear the
+// body — the vault is the canonical record of what was sent.
 function recordEdit(userId, waId, prevBody, newBody, editedAt) {
   if (!waId) return { found: false };
   const row = stmts.findMessageByWaId.get(userId, waId);
@@ -692,20 +653,19 @@ function recordRevoke(userId, waId, revokedAt) {
 }
 
 function getEditHistory(userId, messageId) {
-  // userId is for authorization at the API layer; we still scope by message_id.
-  // Confirm ownership before returning.
+  // Confirm ownership before returning history rows from another user's msg.
   const owns = db.prepare('SELECT 1 FROM messages WHERE id = ? AND user_id = ?').get(messageId, userId);
   if (!owns) return [];
   return stmts.getEditsForMessage.all(messageId);
 }
 
-// ── Phase 4 capture functions ────────────────────────────────────────────────
+// ── Reactions, acks, polls, calls, group events, contact changes ─────────────
 function recordReaction(userId, msgWaId, senderId, emoji, timestamp) {
   if (!msgWaId || !senderId) return;
   stmts.upsertReaction.run(userId, msgWaId, senderId, emoji ?? '', timestamp || Math.floor(Date.now()/1000));
 }
 
-// Returns Map<msg_wa_id, [{emoji, count}]> for a chat — used by getMessages.
+// Returns Map<msg_wa_id, [{emoji, count}]>.
 function getReactionsForChat(userId, chatId) {
   const rows = stmts.getReactionsForChat.all(userId, userId, chatId);
   const out = new Map();
@@ -738,41 +698,6 @@ function getPollVotes(userId, pollWaId) {
   return stmts.getPollVotes.all(userId, pollWaId);
 }
 
-function recordCall(userId, { call_id, peer_id, from_me, is_video, is_group, subtype, duration_sec, timestamp }) {
-  const ts = timestamp || Math.floor(Date.now()/1000);
-  // Dedupe path: same call_id, or same peer within ±5s. wwebjs sometimes
-  // surfaces a call via both the incoming_call event AND a call_log message
-  // and we don't want two rows for the same event.
-  let existing = null;
-  if (call_id) existing = stmts.findCallByCallId.get(userId, call_id);
-  if (!existing && peer_id) existing = stmts.findRecentCallByPeer.get(userId, peer_id, ts);
-  if (existing) {
-    stmts.updateCallFields.run(
-      subtype ?? null,
-      duration_sec ?? null,
-      is_video == null ? null : (is_video ? 1 : 0),
-      from_me == null ? null : (from_me ? 1 : 0),
-      existing.id,
-    );
-    return;
-  }
-  stmts.insertCall.run(
-    userId,
-    call_id || null,
-    peer_id || null,
-    from_me ? 1 : 0,
-    is_video ? 1 : 0,
-    is_group ? 1 : 0,
-    subtype || null,
-    duration_sec ?? null,
-    ts,
-  );
-}
-
-function getCalls(userId, limit = 100) {
-  return stmts.getCalls.all(userId, limit);
-}
-
 function recordGroupEvent(userId, { chat_id, event_type, actor_id, target_ids, body, timestamp }) {
   if (!chat_id || !event_type) return;
   const targets = Array.isArray(target_ids) ? JSON.stringify(target_ids) : (target_ids || null);
@@ -795,8 +720,7 @@ function getContactChanges(userId, contactId) {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function getExtension(mime) {
   if (!mime) return 'bin';
-  // WhatsApp sends MIMEs like 'audio/ogg; codecs=opus' — strip the codec so
-  // the lookup actually finds 'audio/ogg' in the map below.
+  // Strip codec params — WA sends e.g. 'audio/ogg; codecs=opus'.
   const base = String(mime).toLowerCase().split(';')[0].trim();
   const map = {
     'audio/ogg':       'ogg',
@@ -823,17 +747,17 @@ module.exports = {
   createUser, updateUser, getAllUsers, deleteUser,
   saveMessage, attachMediaToMessage, deleteMessages, deleteChat,
   recordEdit, recordRevoke, getEditHistory,
+  findMessageByWaId:   (userId, waId) => stmts.findMessageByWaId.get(userId, waId) || null,
+  getMessagesInWindow: (userId, chatId, sinceTs) => stmts.getMessagesInWindow.all(userId, chatId, sinceTs),
   recordReaction, getReactionsForChat,
   recordAck,
   recordPollOptions, recordPollVote, getPollVotes,
-  recordCall, getCalls,
   recordGroupEvent, getGroupEventsForChat,
   recordContactChange, getContactChanges,
   setBotOnline, setBotOffline, getBotStatus,
   saveProfileVersion,
   getChats:           (userId) => stmts.getChats.all(userId),
-  // Pull messages + attach aggregated reactions per row. The reactions
-  // sub-fetch is one extra indexed query per chat — cheap.
+  // Attaches aggregated reactions per row (one extra indexed query per chat).
   getMessages:        (userId, chatId, limit = 100, offset = 0) => {
     const rows = stmts.getMessages.all(userId, chatId, limit, offset);
     const reactionMap = getReactionsForChat(userId, chatId);
@@ -849,9 +773,8 @@ module.exports = {
   getGlobalStats:     () => stmts.getGlobalStats.get(),
   getLatestProfile:   (userId, chatId) => stmts.getLatestProfile.get(userId, chatId) || null,
   getProfileHistory:  (userId, chatId) => stmts.getProfileHistory.all(userId, chatId),
-  // Batch-fetch the latest row per chat_id for a set of ids. Uses MAX(id) to
-  // pick the newest row per group (id is monotonic so this is unambiguous).
-  // Returns Map<chatId, { pic_filename, name }>.
+  // Returns Map<chatId, { pic_filename, name }>. MAX(id) picks the latest row
+  // per group (id is monotonic).
   getLatestProfilesForChatIds: (userId, chatIds) => {
     if (!Array.isArray(chatIds) || chatIds.length === 0) return new Map();
     const placeholders = chatIds.map(() => '?').join(',');

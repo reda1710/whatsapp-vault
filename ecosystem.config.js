@@ -3,7 +3,7 @@
 const path = require('path');
 const fs   = require('fs');
 
-// Read .env manually so PM2 can inject variables reliably across all Node versions.
+// PM2's built-in env loading is inconsistent across Node versions — parse manually.
 const envFile = path.join(__dirname, '.env');
 const env     = {};
 
@@ -24,8 +24,7 @@ if (fs.existsSync(envFile)) {
 module.exports = {
   apps: [
     {
-      // Single unified app — bot AND dashboard run in this process so they
-      // share the SessionManager instance and one Chrome session per user.
+      // One app — bot and dashboard share the SessionManager in this process.
       name:                      'vault',
       script:                    'bot/index.js',
       cwd:                       __dirname,

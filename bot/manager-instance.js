@@ -1,7 +1,7 @@
 'use strict';
 
-// Shared singleton holder so bot/index.js and dashboard/server.js can
-// reference the SAME SessionManager without circular requires.
+// Singleton holder so bot and dashboard share one SessionManager without
+// circular requires.
 
 let _manager = null;
 

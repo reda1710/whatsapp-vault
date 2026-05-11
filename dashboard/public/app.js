@@ -1,8 +1,8 @@
 const API = window.location.origin + '/api'; // dynamic — works on any host
 
 // ── Media blob cache ────────────────────────────────────────────────────
-// <img>, <audio>, <video> src= can't send custom headers, so we fetch media
-// via apiFetch() (which injects the API key) and store blob URLs locally.
+// <img>/<audio>/<video> src= can't send custom headers, so we fetch the
+// authenticated bytes through apiFetch() and serve them as blob URLs.
 const blobCache = new Map(); // filename → blob URL
 
 async function loadMediaBlob(filename) {
@@ -21,7 +21,7 @@ async function loadMediaBlob(filename) {
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
-// FIX: API key is required. Stored in sessionStorage (cleared when tab closes).
+// API key in sessionStorage — cleared when the tab closes.
 let apiKey = sessionStorage.getItem('vault_api_key') || '';
 
 async function doLogin() {
@@ -30,7 +30,7 @@ async function doLogin() {
   const key   = input.value.trim();
   if (!key) return;
 
-  // Probe /api/stats to validate the key before storing it
+  // Validate against /api/stats before storing.
   try {
     const r = await apiFetch(`${API}/stats`, { headers: { 'X-API-Key': key } });
     if (r.status === 401) {
@@ -50,12 +50,12 @@ async function doLogin() {
   }
 }
 
-// Authenticated fetch wrapper — all API calls go through this
+// Every API call goes through this — injects the key and handles 401.
 async function apiFetch(url, opts = {}) {
   const headers = { 'X-API-Key': apiKey, ...(opts.headers || {}) };
   const r = await fetch(url, { ...opts, headers });
   if (r.status === 401) {
-    // Key expired or invalid — show login again
+    // Key expired or invalid.
     sessionStorage.removeItem('vault_api_key');
     apiKey = '';
     document.getElementById('login-overlay').classList.add('open');
@@ -85,8 +85,8 @@ function initials(name) {
   return name.split(/[\s@_-]+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join('');
 }
 
-// Render an avatar — real profile pic if we have one, otherwise the colored
-// letter circle. The img falls back to a letter circle if the file is gone.
+// Real profile pic if we have one, otherwise a colored letter circle.
+// onerror falls back to the letter circle if the file vanished.
 function renderAvatar(name, picFilename, extraClass = '') {
   const safe = name || '?';
   const [bg, fg] = avatarColor(safe);
@@ -111,9 +111,8 @@ function onAvatarError(img) {
   img.replaceWith(div);
 }
 
-// Small avatar variant used inside the profile-modal member list. Same
-// onerror → letter-circle fallback as renderAvatar, but a different class so
-// the size doesn't collide with the 38px chat-list / header avatars.
+// Smaller variant for the member list — distinct class so it doesn't
+// collide with the 38px chat-list / header avatar sizing.
 function renderMemberAvatar(name, picFilename) {
   const safe = name || '?';
   const [bg, fg] = avatarColor(safe);
@@ -137,9 +136,8 @@ function onMemberAvatarError(img) {
   img.replaceWith(div);
 }
 
-// Replace the chat-header avatar element in place — preserves the #chat-avatar
-// id so subsequent updates (and the inline click handler on the header) keep
-// working regardless of whether the avatar is currently an img or a div.
+// Replace in place — preserves the #chat-avatar id and click handler
+// whether the current node is an <img> or the fallback letter <div>.
 function setHeaderAvatar(name, picFilename) {
   const old = document.getElementById('chat-avatar');
   if (!old) return;
@@ -173,7 +171,6 @@ function fmtFull(ts) {
 
 // ── Stats ───────────────────────────────────────────────────────────────
 async function loadStats() {
-  // Fetch stats and bot status in parallel
   try {
     const statsUrl = currentUserId ? `${API}/stats?userId=${currentUserId}` : `${API}/stats`;
     const [statsRes, statusRes] = await Promise.all([
@@ -282,33 +279,27 @@ async function selectChat(chatId, name, isGroup, count, picFilename) {
   });
 
   await loadMessages(chatId);
-  // On mobile we show one pane at a time; flag the body BEFORE the snap so
-  // the chat-area is laid out (display:none → display:flex) — otherwise its
-  // scrollHeight is 0 at the moment we try to scroll to the bottom.
+  // Flip body.chat-open BEFORE the scrollTop assignment — on mobile the
+  // chat-area is display:none until then, so scrollHeight would be 0.
   document.body.classList.add('chat-open');
-  // Snap to the latest message. Background reloads (SSE / poller / refresh)
-  // go through reloadCurrentChatMessages() and do NOT snap — they preserve
-  // the user's scroll position instead.
+  // Snap-to-bottom only on user-initiated chat open. Background reloads go
+  // through reloadCurrentChatMessages() and preserve scroll position.
   const box = document.getElementById('messages');
   box.scrollTop = box.scrollHeight;
 }
 
-// Mobile back-button: return to the chat-list view.
 function closeChatView() {
   document.body.classList.remove('chat-open');
 }
 
-// Mobile stats popover toggle. The statsbar element is reused as a dropdown
-// panel via CSS; this just flips the .open class.
 function toggleStatsMenu(e) {
   if (e) e.stopPropagation();
   document.querySelector('.statsbar').classList.toggle('open');
 }
 
 // ── Load messages ───────────────────────────────────────────────────────
-// Server returns the latest N messages (offset M from the newest) in ASC
-// order. Fresh load = offset 0 → newest 50. Load-more = offset loadedCount
-// → next 50 older, prepended to allMessages.
+// Server returns the newest N in ASC order. Fresh load = offset 0;
+// load-more = offset loadedCount, prepended to allMessages.
 let loadedCount  = 0;
 const MSG_LIMIT  = 50;
 let hasMoreMsgs  = false;
@@ -322,9 +313,8 @@ async function loadMessages(chatId, prepend = false, limitOverride) {
     box.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   }
   try {
-    // Over-fetch by 1 so we can distinguish "exactly N left" from "N+ left"
-    // without a separate count query. If we got the extra row, drop the
-    // oldest (index 0 in ASC order) and flag hasMore.
+    // Over-fetch by 1 to distinguish "exactly N left" from "N+ left"
+    // without an extra COUNT query.
     const r    = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/messages?userId=${currentUserId}&limit=${limit + 1}&offset=${loadedCount}`);
     let page   = await r.json();
     const more = page.length > limit;
@@ -344,16 +334,13 @@ async function loadMoreMessages() {
   const prevH   = box.scrollHeight;
   const prevTop = box.scrollTop;
   await loadMessages(currentChatId, true);
-  // Anchor the user's view: keep the same message under the cursor by
-  // shifting scrollTop by the height of the freshly-prepended block.
+  // Keep the same message under the cursor by shifting scrollTop by the
+  // height of the newly-prepended block.
   box.scrollTop = prevTop + (box.scrollHeight - prevH);
 }
 
-// Background reloads (10s poll, SSE) refresh the active chat without yanking
-// the user's scroll. We fetch silently (never wiping innerHTML during the
-// network trip), then diff-render by data-id so surviving message nodes —
-// with their already-loaded images, paused videos, and voice-note timers —
-// stay in place. Idle polls (no message changes) become true no-ops.
+// Diff-render by data-id so paused videos, loaded images, and voice-note
+// timers survive the reload. Idle polls (no fingerprint changes) are no-ops.
 async function reloadCurrentChatMessages() {
   if (!currentChatId) return;
   const box = document.getElementById('messages');
@@ -363,8 +350,8 @@ async function reloadCurrentChatMessages() {
     if (!v.paused) return;
   }
 
-  // Keep however many older pages the user already expanded; otherwise an SSE
-  // tick would silently snap them back to just the latest 50.
+  // Preserve any older pages the user already expanded — otherwise an SSE
+  // tick would silently snap them back to the latest 50.
   const limit = Math.max(MSG_LIMIT, loadedCount);
   let page, more;
   try {
@@ -397,8 +384,8 @@ async function reloadCurrentChatMessages() {
     if (!isMsg || !keepIds.has(parseInt(node.dataset.id, 10))) node.remove();
   }
 
-  // Save allMessages to the new page BEFORE walking, so renderMessage's
-  // quoted-banner lookup (which scans allMessages) sees the fresh data.
+  // Update allMessages BEFORE the walk so renderMessage's quoted-banner
+  // lookup (which scans allMessages) sees the fresh data.
   allMessages = page;
 
   let cursor = box.firstElementChild;
@@ -406,8 +393,7 @@ async function reloadCurrentChatMessages() {
     const want = msgFingerprint(m);
     if (cursor && parseInt(cursor.dataset.id, 10) === m.id) {
       if (cursor.dataset.fp !== want) {
-        // Same message, content changed (edit / revoke / late media) — swap in
-        // a freshly-rendered bubble at this exact position.
+        // Same id, content changed (edit / revoke / late media) — swap node.
         const tmp = document.createElement('div');
         tmp.innerHTML = renderMessage(m);
         const fresh = tmp.firstElementChild;
@@ -440,9 +426,8 @@ async function reloadCurrentChatMessages() {
   if (wasNearBottom) box.scrollTop = box.scrollHeight;
 }
 
-// Fields whose change requires re-rendering a message bubble. Keep this in
-// sync with reloadCurrentChatMessages's diff-render so initial-load and
-// background-poll renders agree on what counts as "unchanged".
+// Fields that force a bubble re-render. Must stay in sync with the
+// diff-render comparison in reloadCurrentChatMessages.
 function msgFingerprint(m) {
   return `${m.id}:${m.body || ''}:${m.edited_at || 0}:${m.revoked_at || 0}:${m.media_file || ''}:${m.ack || 0}:${m.reactions || ''}`;
 }
@@ -465,8 +450,7 @@ function renderMessages() {
        </div>`
     : '';
   box.innerHTML = loadMoreBtn + msgs.map(renderMessage).join('');
-  // Stamp data-fp on each freshly-rendered bubble so the next diff-render
-  // tick can tell which (if any) need to be replaced.
+  // Stamp data-fp so the next diff-render knows what's already current.
   for (const node of box.querySelectorAll('.msg-wrap[data-id]')) {
     const m = msgs.find(x => x.id === parseInt(node.dataset.id, 10));
     if (m) node.dataset.fp = msgFingerprint(m);
@@ -479,12 +463,10 @@ function renderMessage(m) {
   const senderLine = !m.from_me
     ? `<div class="msg-sender">${esc(m.sender || 'Unknown')}</div>` : '';
 
-  // Edit + revoke affordances on the meta line. Edited messages show a
-  // clickable "edited" tag that opens the version history popover.
   const editTag = m.edited_at
     ? ` <span class="edited-tag" onclick="event.stopPropagation();showEditHistory(${m.id})">· edited</span>`
     : '';
-  // Read receipts on outbound messages only (1=server, 2=device, 3=read, 4=played).
+  // 1=server, 2=device, 3=read, 4=played — outbound only.
   const ackTag = (m.from_me && m.ack)
     ? ` <span class="ack-tag ack-${m.ack}">${ackIcon(m.ack)}</span>`
     : '';
@@ -499,7 +481,7 @@ function renderMessage(m) {
   if (m.type === 'ptt' || m.type === 'audio') {
     content = renderVoice(m);
   } else if (m.type === 'image' || m.type === 'sticker') {
-    // Stickers are .webp images — render them like photos (just smaller)
+    // Stickers are .webp images — render like photos but smaller.
     content = renderImage(m, m.type === 'sticker');
   } else if (m.type === 'video') {
     content = renderVideo(m);
@@ -517,7 +499,6 @@ function renderMessage(m) {
     content = `<div class="bubble">${highlightMentions(m.body || '', m.mentions)}</div>`;
   }
 
-  // Checkbox (visible in select mode) + per-message delete (visible on hover in normal mode)
   const checkbox = `<div class="msg-check" onclick="event.stopPropagation();toggleMsgSelect(${m.id})"></div>`;
   const delBtn   = `<button class="msg-del-btn" onclick="event.stopPropagation();confirmDeleteOne(${m.id})">🗑</button>`;
 
@@ -538,7 +519,6 @@ function ackIcon(ack) {
   return '';
 }
 
-// Render aggregated reactions as small chips below the bubble.
 function renderReactionsRow(reactionsJson) {
   let arr;
   try { arr = JSON.parse(reactionsJson); } catch { return ''; }
@@ -547,8 +527,7 @@ function renderReactionsRow(reactionsJson) {
   return `<div class="reactions-row">${chips}</div>`;
 }
 
-// Poll-creation message — name + option list. Live tally is loaded on demand
-// (one fetch per poll on first render) and rebuilt on vote_update SSE events.
+// Live tally is fetched once on render and rebuilt on vote_update SSE.
 function renderPoll(m) {
   let opts = [];
   try { opts = JSON.parse(m.poll_options || '[]'); } catch {}
@@ -561,7 +540,7 @@ function renderPoll(m) {
       </div>
     </div>
   `).join('');
-  // Schedule a tally refresh after the bubble is in the DOM.
+  // Defer to next tick so the bubble is in the DOM before the fetch lands.
   if (m.wa_id) setTimeout(() => refreshPollTally(m.id, m.wa_id, opts.length), 0);
   return `<div class="bubble poll-bubble" id="poll-${m.id}" data-poll-wa="${escAttr(m.wa_id || '')}" data-poll-opts="${opts.length}">
     <div class="poll-title">📊 ${esc(m.body || 'Poll')}</div>
@@ -569,16 +548,24 @@ function renderPoll(m) {
   </div>`;
 }
 
-// Call log bubble — direction arrow, outcome (missed/answered), and the
-// duration string from the body when present.
 function renderCallLog(m) {
   const out = m.from_me;
   const arrow = out ? '↗' : '↙';
   const label = out ? 'Outgoing call' : 'Incoming call';
   const body = (m.body || '').trim();
   const isMissed = /missed/i.test(body);
-  const icon = isMissed ? '📵' : '📞';
-  const detail = body ? `<span class="call-detail">${esc(body)}</span>` : '';
+  // Prefer the captured column; fall back to the body-string heuristic for
+  // rows archived before call_is_video existed.
+  const isVideo = m.call_is_video != null ? !!m.call_is_video : /video/i.test(body);
+  const icon = isMissed ? '📵' : isVideo ? '📹' : '📞';
+  let detail = '';
+  if (Number.isFinite(m.call_duration_sec) && m.call_duration_sec > 0) {
+    const mins = Math.floor(m.call_duration_sec / 60);
+    const secs = String(m.call_duration_sec % 60).padStart(2, '0');
+    detail = `<span class="call-detail">${mins}:${secs}</span>`;
+  } else if (body) {
+    detail = `<span class="call-detail">${esc(body)}</span>`;
+  }
   return `<div class="bubble call-bubble">
     <span class="call-icon">${icon}</span>
     <span class="call-arrow">${arrow}</span>
@@ -613,8 +600,7 @@ async function refreshPollTally(messageId, pollWaId, optionCount) {
   }
 }
 
-// Edit-history popover. Fetches the per-message edit log and shows a small
-// floating panel with each version. Closing is via outside click.
+// Closes on outside click.
 async function showEditHistory(messageId) {
   document.querySelectorAll('.edit-history-popover').forEach(el => el.remove());
   let rows = [];
@@ -642,8 +628,7 @@ async function showEditHistory(messageId) {
   }, 0);
 }
 
-// Quoted-reply preview banner — shown above the bubble when this message
-// replies to another. Returns empty if the parent isn't currently loaded.
+// Returns null if the parent isn't currently in allMessages.
 function findQuotedMessage(quotedWaId) {
   if (!quotedWaId) return null;
   return allMessages.find(m => m.wa_id === quotedWaId) || null;
@@ -672,7 +657,6 @@ function scrollToMessage(id) {
   setTimeout(() => el.classList.remove('msg-flash'), 1200);
 }
 
-// Highlight @<number> spans corresponding to mentioned WA contact ids.
 function highlightMentions(body, mentionsJson) {
   if (!body) return '';
   if (!mentionsJson) return esc(body);
@@ -688,8 +672,8 @@ function highlightMentions(body, mentionsJson) {
   return html;
 }
 
-// Pull FN: and TEL: from the first vCard so we can render structured info
-// instead of raw card text. Falls back to body if parsing fails.
+// Pull FN/TEL out of the first vCard for a structured bubble; on parse
+// failure fall back to msg.body.
 function renderVcard(m) {
   let parsed = null;
   if (m.vcards) {
@@ -713,7 +697,6 @@ function renderVcard(m) {
   return `<div class="bubble">👤 Contact card${m.body ? ': ' + esc(m.body.substring(0, 80)) : ''}</div>`;
 }
 
-// Location bubble that surfaces name/address/url when wwebjs gave them to us.
 function renderLocation(m) {
   const hasMeta = m.loc_name || m.loc_address || m.loc_url;
   const lat = (m.lat != null) ? Number(m.lat).toFixed(4) : '?';
@@ -738,7 +721,7 @@ function renderVoice(m) {
   }).join('');
 
   const id = `voice-${m.id}`;
-  // Pass the filename — toggleVoice will load the blob URL on first play
+  // toggleVoice loads the blob URL on first play.
   return `
     <div class="voice-bubble" id="${id}" onclick="toggleVoice('${id}','${esc(m.media_file || '')}')">
       <button class="play-btn" id="btn-${id}">▶</button>
@@ -750,14 +733,14 @@ function renderVoice(m) {
 function renderImage(m, isSticker = false) {
   if (!m.media_file) return `<div class="bubble">${isSticker ? '🎭 Sticker' : '🖼 Image'} (not downloaded)</div>`;
   const imgId = `img-${m.id}`;
-  // Render placeholder immediately, then load the authenticated blob async
+  // Render placeholder synchronously, swap in the blob URL when it loads.
   setTimeout(async () => {
     const el = document.getElementById(imgId);
     if (!el) return;
     const url = await loadMediaBlob(m.media_file);
     if (url) {
       el.src = url;
-      // Only stickers skip the lightbox click — photos open lightbox
+      // Photos open the lightbox; stickers don't.
       if (!isSticker) el.closest('.img-bubble').onclick = () => openLightbox(url);
     } else {
       el.parentElement.innerHTML = `<div style="padding:12px;font-size:12px;color:var(--muted)">${isSticker ? '🎭 Sticker' : '🖼 Image'} unavailable</div>`;
@@ -765,7 +748,7 @@ function renderImage(m, isSticker = false) {
   }, 0);
 
   if (isSticker) {
-    // Stickers: smaller, transparent background, no caption
+    // Smaller bubble, transparent background, no caption.
     return `
       <div class="img-bubble" style="background:transparent;border:none;max-width:140px">
         <img id="${imgId}" alt="Sticker" style="min-height:60px;max-height:140px;background:transparent" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
@@ -781,9 +764,9 @@ function renderImage(m, isSticker = false) {
 
 function renderVideo(m) {
   if (!m.media_file) return `<div class="bubble">🎬 Video (not downloaded)</div>`;
-  // Use direct URL — videos rely on Range requests for streaming/seeking
+  // Direct URL — <video> uses native Range requests for seeking.
   const directUrl = `${API}/media/${encodeURIComponent(m.media_file)}?key=${encodeURIComponent(apiKey)}`;
-  // id lets reloadCurrentChatMessages restore currentTime after a DOM wipe
+  // Stable id so the diff-render can keep the same element across reloads.
   return `
     <div class="img-bubble">
       <video id="vid-${m.id}" controls preload="metadata" style="width:100%;max-height:200px;display:block" src="${directUrl}"></video>
@@ -820,7 +803,6 @@ let currentAudioId = null;
 async function toggleVoice(id, filename) {
   if (!filename) return;
 
-  // Pause/resume if already loaded
   if (currentAudioId === id && currentAudio) {
     currentAudio.paused ? currentAudio.play() : currentAudio.pause();
     const btn = document.getElementById(`btn-${id}`);
@@ -828,7 +810,6 @@ async function toggleVoice(id, filename) {
     return;
   }
 
-  // Stop previous
   if (currentAudio) {
     currentAudio.pause();
     const prevBtn = document.getElementById(`btn-${currentAudioId}`);
@@ -839,8 +820,7 @@ async function toggleVoice(id, filename) {
   const btn = document.getElementById(`btn-${id}`);
   if (btn) { btn.textContent = '…'; btn.disabled = true; }
 
-  // Use direct authenticated URL — Range requests work natively, no blob needed.
-  // The server accepts ?key= via the same fallback used by SSE.
+  // Direct authenticated URL with ?key= — Range requests work natively.
   const directUrl = `${API}/media/${encodeURIComponent(filename)}?key=${encodeURIComponent(apiKey)}`;
   currentAudio   = new Audio(directUrl);
   currentAudioId = id;
@@ -849,9 +829,8 @@ async function toggleVoice(id, filename) {
     const t = currentAudio.currentTime;
     const m = Math.floor(t / 60);
     const s = Math.floor(t % 60).toString().padStart(2, '0');
-    // Requery on each tick — a background chat reload between play sessions
-    // would have replaced the .voice-dur span, leaving any captured reference
-    // detached. The closure-scoped `id` is stable, so this lookup is cheap.
+    // Requery each tick — a diff-render between play sessions may have
+    // replaced .voice-dur. The closure-scoped `id` stays valid.
     const liveDur = document.querySelector(`#${id} .voice-dur`);
     if (liveDur) liveDur.textContent = `${m}:${s}`;
   });
@@ -915,14 +894,12 @@ function handleSearch(q) {
   if (!q.trim() || !currentUserId) {
     panel.classList.remove('open');
     msgs.style.display = 'flex';
-    // On mobile: drop the chat-open body class if no chat was open before
-    // searching, so the user lands back on the chat list.
+    // Drop chat-open so mobile users land back on the chat list.
     if (!currentChatId) document.body.classList.remove('chat-open');
     return;
   }
 
-  // On mobile the chat-area (and its child .search-results) is hidden until
-  // body.chat-open is set. Flip it on so the results panel is visible.
+  // On mobile, .search-results is hidden until body.chat-open is set.
   document.body.classList.add('chat-open');
   msgs.style.display = 'none';
   panel.classList.add('open');
@@ -991,7 +968,6 @@ function toggleSelectMode() {
   actionBar.classList.toggle('visible', selectMode);
   updateSelCount();
 
-  // Re-render so checkboxes / del buttons appear/disappear
   renderMessages();
 }
 
@@ -1019,7 +995,6 @@ function toggleMsgSelect(id) {
   else selectedIds.add(id);
   updateSelCount();
 
-  // Flip just this wrapper's checked class without full re-render
   const wrap = document.querySelector('.msg-wrap[data-id="' + id + '"]');
   if (wrap) wrap.classList.toggle('checked', selectedIds.has(id));
 }
@@ -1102,7 +1077,6 @@ async function modalConfirm() {
   if (action) await action();
 }
 
-// Close modal on overlay click
 document.getElementById('confirm-modal').addEventListener('click', function(e) {
   if (e.target === this) closeModal();
 });
@@ -1123,7 +1097,7 @@ async function apiDeleteMessages(ids) {
 
 async function apiDeleteChat(chatId) {
   try {
-    // Server requires ?userId= as a query param to scope the delete
+    // userId scopes the delete server-side.
     const url = `${API}/chats/${encodeURIComponent(chatId)}?userId=${currentUserId}`;
     const r   = await apiFetch(url, { method: 'DELETE' });
     if (!r.ok) {
@@ -1225,19 +1199,16 @@ function toggleUserMenu() {
   menu.classList.toggle('open', userMenuOpen);
   if (userMenuOpen) {
     renderUserMenu();
-    // If users haven't loaded yet (or load failed), retry immediately so
-    // the dropdown always reflects the current server state when opened.
+    // Retry the load so the dropdown reflects current state on open.
     if (users.length === 0) loadUsers();
   }
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', e => {
   if (userMenuOpen && !document.getElementById('user-dropdown').contains(e.target)) {
     document.getElementById('user-menu').classList.remove('open');
     userMenuOpen = false;
   }
-  // Same for the mobile stats popover
   const sb = document.querySelector('.statsbar');
   if (sb && sb.classList.contains('open')
       && !sb.contains(e.target)
@@ -1254,13 +1225,11 @@ async function selectUser(userId) {
   allMessages   = [];
   document.getElementById('user-menu').classList.remove('open');
   userMenuOpen = false;
-  // On mobile, switching accounts should drop the user back to the chat list,
-  // not leave them parked on the now-empty chat-area panel.
+  // Drop back to the chat list on mobile rather than the empty pane.
   document.body.classList.remove('chat-open');
   updateUserBtn();
   updateReconnectBanner();
 
-  // Reset chat area
   document.getElementById('chat-header').style.display = 'none';
   document.getElementById('filter-bar').style.display  = 'none';
   document.getElementById('action-bar').classList.remove('visible');
@@ -1276,12 +1245,10 @@ async function loadUsers() {
   try {
     const r = await apiFetch(`${API}/users`);
     users   = await r.json();
-    // Sync statuses from server response
     users.forEach(u => { userStatuses[u.id] = u.status || 'offline'; });
     renderUserMenu();
     updateUserBtn();
 
-    // Auto-select first user if none selected
     if (!currentUserId && users.length > 0) {
       await selectUser(users[0].id);
     }
@@ -1298,7 +1265,7 @@ async function openAddUser() {
   const name = prompt('Enter a name for this WhatsApp account (e.g. "Reda" or "Sara"):');
   if (!name || !name.trim()) return;
 
-  // Create user on server — this immediately starts the WhatsApp session
+  // Server starts the WA session immediately.
   let user;
   try {
     const r = await apiFetch(`${API}/users`, {
@@ -1351,14 +1318,14 @@ function openQRModal(user) {
   document.getElementById('qr-status-badge').textContent = 'Starting session...';
   document.getElementById('qr-status-badge').className   = 'qr-status waiting';
   document.getElementById('qr-modal-overlay').classList.add('open');
-  // Poll for QR in case SSE delivers it before we open the modal
+  // Poll in case SSE delivered the QR before the modal was open.
   pollQR(user.id);
 }
 
-// reason: 'cancel' = user dismissed the modal (X / overlay click) → destroy Chrome
-//         'auto'   = system closed it (scan succeeded or QR_TIMEOUT)         → leave the
-//                    server-side state alone; /cancel and /disconnect would otherwise
-//                    tear down a session that just went online or was already destroyed.
+// reason: 'cancel' = user dismissed (X / overlay click) → tear down Chrome.
+//         'auto'   = system closed it (scan succeeded or QR_TIMEOUT) — don't
+//                    fire /cancel or /disconnect; the session is already gone
+//                    or just went online.
 async function closeQRModal(reason = 'cancel') {
   document.getElementById('qr-modal-overlay').classList.remove('open');
   const cancelId  = qrModalUserId;
@@ -1368,7 +1335,7 @@ async function closeQRModal(reason = 'cancel') {
   if (!cancelId || reason === 'auto') return;
 
   if (isNew) {
-    // Brand-new user who never scanned — stop Chrome and remove them.
+    // New user who never scanned — remove them.
     try {
       const r = await apiFetch(`${API}/users/${cancelId}/cancel`, { method: 'POST' });
       const d = await r.json();
@@ -1378,14 +1345,12 @@ async function closeQRModal(reason = 'cancel') {
       }
     } catch (_) {}
   } else {
-    // Existing user dismissed the Reconnect modal — stop Chrome but keep the
-    // user. Status stays 'qr' (red dot) so the Reconnect banner remains visible.
+    // Reconnect dismissed — stop Chrome, keep the user in 'qr'.
     try { await apiFetch(`${API}/users/${cancelId}/disconnect`, { method: 'POST' }); } catch (_) {}
   }
 }
 
-// Show/hide the "Account disconnected — Reconnect" banner above the chat list,
-// based on the current user's status. Called from selectUser() and SSE handlers.
+// Driven by current user status; called from selectUser() and SSE handlers.
 function updateReconnectBanner() {
   const banner = document.getElementById('reconnect-banner');
   if (!banner) return;
@@ -1394,7 +1359,6 @@ function updateReconnectBanner() {
   banner.style.display = (st === 'qr') ? 'flex' : 'none';
 }
 
-// Triggered by the Reconnect button — start the session and open the QR modal.
 async function reconnectCurrentUser() {
   if (!currentUserId) return;
   const user = users.find(u => u.id === currentUserId);
@@ -1406,8 +1370,8 @@ async function reconnectCurrentUser() {
 }
 
 async function pollQR(userId) {
-  // Poll every 2s for up to 2 minutes — Chrome takes 20-30s to launch on
-  // a 1GB VM, and we want to keep refreshing the QR if it regenerates.
+  // Poll every 2s for 2 min — Chrome takes 20-30s to launch on a 1 GB VM,
+  // and the QR regenerates every ~20s while we wait.
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 2000));
     if (qrModalUserId !== userId) return; // modal was closed
@@ -1423,7 +1387,6 @@ async function pollQR(userId) {
       if (d.qr) renderQRInModal(d.qr);   // keep refreshing — don't return
     } catch (_) {}
   }
-  // After 2 min with no QR, show a helpful message
   if (qrModalUserId === userId) {
     document.getElementById('qr-status-badge').textContent = '⚠️ Taking too long — check server logs';
     document.getElementById('qr-status-badge').className   = 'qr-status offline';
@@ -1441,7 +1404,7 @@ function renderQRInModal(qrDataUrl) {
 // ── SSE — real-time events ────────────────────────────────────────────────
 function connectSSE() {
   if (sseSource) sseSource.close();
-  // Include API key in URL since EventSource can't send custom headers
+  // EventSource can't send custom headers — pass the key via ?key=.
   sseSource = new EventSource(`${API}/events?key=${encodeURIComponent(apiKey)}`);
 
   sseSource.addEventListener('qr', e => {
@@ -1454,17 +1417,15 @@ function connectSSE() {
   sseSource.addEventListener('ready', e => {
     const { userId, name } = JSON.parse(e.data);
     userStatuses[userId] = 'online';
-    // Update name in local users array (WhatsApp may have returned real name)
+    // WA may have returned the user's real name on link.
     const u = users.find(x => x.id === userId);
     if (u) u.name = name;
     renderUserMenu(); updateUserBtn(); updateReconnectBanner();
-    // Close QR modal if this is the user being linked
     if (qrModalUserId === userId) {
       document.getElementById('qr-status-badge').textContent = '✅ Connected!';
       document.getElementById('qr-status-badge').className   = 'qr-status online';
       setTimeout(() => closeQRModal('auto'), 1500);
     }
-    // Reload users to get updated phone number
     loadUsers();
   });
 
@@ -1472,8 +1433,7 @@ function connectSSE() {
     const { userId, status } = JSON.parse(e.data);
     userStatuses[userId] = status;
     renderUserMenu(); updateUserBtn(); updateReconnectBanner();
-    // If the QR modal is open for this user and the scan just landed,
-    // swap the QR for a spinner and update the badge while chats sync.
+    // Scan just landed — show a spinner while chats sync.
     if (qrModalUserId === userId && status === 'authenticated') {
       document.getElementById('qr-box').innerHTML            = '<div class="qr-spinner"></div>';
       document.getElementById('qr-status-badge').textContent = '✓ Scanned — syncing chats...';
@@ -1483,8 +1443,7 @@ function connectSSE() {
 
   sseSource.addEventListener('qr_timeout', e => {
     const { userId } = JSON.parse(e.data);
-    // Auto-close the modal — Chrome was already destroyed by QR_TIMEOUT.
-    // 'auto' so we don't fire a second /disconnect that would do nothing.
+    // Chrome was already torn down by QR_TIMEOUT — 'auto' skips /disconnect.
     if (qrModalUserId === userId) closeQRModal('auto');
   });
 
@@ -1506,7 +1465,6 @@ function connectSSE() {
 
     showToast(icon, title, sub);
 
-    // Refresh chat list if this message belongs to the active user
     if (userId === currentUserId) {
       loadChats();
       await reloadCurrentChatMessages();
@@ -1523,15 +1481,13 @@ function connectSSE() {
     if (userId === currentUserId) await reloadCurrentChatMessages();
   });
 
-  // Reactions are part of msgFingerprint — a chat reload picks them up via
-  // the diff-render. No per-bubble surgical update needed.
+  // reactions are part of msgFingerprint — diff-render handles the swap.
   sseSource.addEventListener('reaction', async e => {
     const { userId } = JSON.parse(e.data);
     if (userId === currentUserId) await reloadCurrentChatMessages();
   });
 
-  // Vote updates only affect poll bubbles. Re-fetch the tally for any
-  // visible poll bubble with that wa_id; no full chat reload needed.
+  // Surgical refresh — only the matching poll bubble's tally, no chat reload.
   sseSource.addEventListener('vote_update', e => {
     const { userId, pollWaId } = JSON.parse(e.data);
     if (userId !== currentUserId || !pollWaId) return;
@@ -1543,7 +1499,6 @@ function connectSSE() {
   });
 
   sseSource.onerror = () => {
-    // Reconnect after 5s on error
     setTimeout(connectSSE, 5000);
   };
 }
@@ -1587,7 +1542,7 @@ async function openProfileModal(chatId) {
   _resetHistoryPanel();
   document.getElementById('profile-modal').classList.add('open');
 
-  // 1. Paint what we already have — instant.
+  // 1. Paint cached snapshot — instant.
   let cached = null;
   try {
     const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/profile?userId=${currentUserId}`);
@@ -1599,7 +1554,7 @@ async function openProfileModal(chatId) {
     document.getElementById('profile-fields').innerHTML = '<div class="empty"><h3>Failed to load profile</h3></div>';
   }
 
-  // 2. Background refresh — dedupes server-side, updates if something changed.
+  // 2. Live refresh — server dedupes, only repaints if something changed.
   if (profileModalChatId !== chatId) return;
   try {
     const r = await apiFetch(`${API}/chats/${encodeURIComponent(chatId)}/profile/refresh?userId=${currentUserId}`, { method: 'POST' });
@@ -1629,7 +1584,6 @@ function closeProfileModal() {
 
 // ── Member drill-down ──────────────────────────────────────────────────────
 async function openMemberProfile(memberId) {
-  // Push current view onto the breadcrumb stack.
   profileNavStack.push({
     chatId:    profileModalChatId,
     profile:   currentLatestProfile,
@@ -1647,7 +1601,7 @@ async function openMemberProfile(memberId) {
   document.getElementById('profile-fields').innerHTML    = '<div class="empty"><div class="spinner"></div></div>';
   _resetHistoryPanel();
 
-  // 1. Paint cached snapshot (may be null for contacts we haven't visited).
+  // Cached snapshot may be null for contacts we haven't visited yet.
   let cached = null;
   try {
     const r = await apiFetch(`${API}/chats/${encodeURIComponent(memberId)}/profile?userId=${currentUserId}`);
@@ -1656,7 +1610,6 @@ async function openMemberProfile(memberId) {
     paintProfile(cached);
   } catch {}
 
-  // 2. Background refresh pulls pic, about, phone from WhatsApp.
   if (profileModalChatId !== memberId) return;
   try {
     const r = await apiFetch(`${API}/chats/${encodeURIComponent(memberId)}/profile/refresh?userId=${currentUserId}`, { method: 'POST' });
@@ -1717,15 +1670,12 @@ function parseParticipants(json) {
   } catch { return null; }
 }
 
-// Format a phone number for display. Prefer the E.164 we resolved server-side
-// via Contact.number; fall back to parsing the raw id, but only when it's a
-// legacy @c.us id (the @lid user-part is NOT a phone number, so showing it
-// would mislead — return a placeholder instead).
+// Prefer the resolved Contact.number; only fall back to parsing the id's
+// user-part for @c.us — @lid user-parts are not real phone numbers.
 function formatPhone(number, fallbackId) {
   if (number) return '+' + String(number).replace(/^\+/, '');
   const id = String(fallbackId || '');
-  // Only parse the user-part for @c.us ids — those genuinely contain the
-  // phone. @lid user-parts are WhatsApp-internal privacy ids, not phones.
+  // @c.us only — @lid user-parts are WA-internal privacy ids.
   if (id.endsWith('@c.us')) return '+' + id.split('@')[0];
   return null; // caller decides what to show when phone is unavailable
 }
@@ -1737,7 +1687,6 @@ function paintProfile(p) {
   const name = (p && p.name) || headerName || chatId.split('@')[0] || '?';
   const participants = parseParticipants(p?.participants);
 
-  // Big picture
   const picBox = document.getElementById('profile-pic-large');
   if (p && p.pic_filename) {
     picBox.innerHTML = `<img class="profile-pic-img"
@@ -1763,8 +1712,7 @@ function paintProfile(p) {
   const rows = [];
   if (p && p.about)       rows.push(['About',        esc(p.about)]);
   if (p && p.description) rows.push(['Description',  esc(p.description)]);
-  // Pushname (what they call themselves on WA) — only show if it differs from
-  // the name we already have at the top.
+  // Show pushname only when it differs from the saved name.
   if (p && p.pushname && p.pushname !== name) rows.push(['Pushname', esc(p.pushname)]);
   if (p && p.business_profile) {
     const html = renderBusinessProfile(p.business_profile);
@@ -1791,9 +1739,8 @@ function paintProfile(p) {
     : '<div class="profile-field profile-field-empty">No additional info available.</div>';
 }
 
-// Best-effort rendering of WA's business profile blob — surfaces address,
-// email, websites, vertical, and hours when present, ignores fields we
-// don't recognize. Returns '' if the JSON is empty or unparseable.
+// Best-effort — surfaces address / email / websites / vertical when present,
+// returns '' on parse failure.
 function renderBusinessProfile(json) {
   let bp;
   try { bp = JSON.parse(json); } catch { return ''; }
@@ -1812,9 +1759,8 @@ function renderBusinessProfile(json) {
   return lines.join('') || '';
 }
 
-// Append "Previously / Recent activity" rows to the profile-fields list
-// after the main profile has painted. Both fetches run in parallel and any
-// failure is silent — these are decorative, not load-blocking.
+// Appends "Previously / Recent activity" after paintProfile. Silent on
+// failure — these are decorative, not load-blocking.
 async function decorateProfileExtras(chatId) {
   if (!chatId || profileModalChatId !== chatId) return;
   const isGroup = chatId.endsWith('@g.us');
@@ -1845,7 +1791,7 @@ function appendProfileExtraRow(key, valHtml) {
 
 function renderGroupEventsList(events) {
   if (!Array.isArray(events) || !events.length) return '';
-  // Newest first, cap at 20 — older history is in the DB if needed.
+  // Newest first, cap at 20.
   const recent = events.slice(-20).reverse();
   return `<div class="group-events-list">${recent.map(e => {
     const label = describeGroupEvent(e);
@@ -1926,7 +1872,6 @@ function showToast(icon, title, sub) {
     </div>
     <button class="toast-close" onclick="document.getElementById('${id}').remove()">✕</button>`;
   container.appendChild(el);
-  // Auto-dismiss after 5s
   setTimeout(() => { try { el.remove(); } catch(_) {} }, 5000);
 }
 
@@ -1941,7 +1886,7 @@ async function refresh() {
 // ── Init ────────────────────────────────────────────────────────────────
 (async () => {
   if (apiKey) {
-    // Returning visitor with a cached key — validate it first
+    // Validate the cached key before reusing it.
     try {
       const r = await fetch(`${API}/stats`, { headers: { 'X-API-Key': apiKey } });
       if (r.status === 401) {
@@ -1963,5 +1908,5 @@ async function refresh() {
       document.getElementById('login-overlay').classList.add('open');
     }
   }
-  // else: login overlay is already open (default)
+  // No key — login overlay is open by default.
 })();

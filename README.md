@@ -42,7 +42,7 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 - 💚 **Reactions** — every reaction is archived per sender; aggregated chips render under each message
 - ✓✓ **Read receipts** — server / device / read / played ticks tracked on outbound messages
 - 📊 **Polls** — option list captured at creation, live tally updates as votes arrive
-- 📞 **Call log** — `incoming_call` events recorded with peer, time, video/group flags
+- 📞 **Call log** — captured during the 30-min sweep via `Chat.fetchMessages`; each call lands as a `call_log` message with direction, duration, video/voice flag, and participants
 - 👥 **Group activity log** — joins, leaves, subject/desc changes, admin promotions, and pending join requests
 - 🪪 **Profile snapshots** — name, phone, about, description, business profile (address/hours/websites), and avatar versioned over time with diff-based dedupe; auto-refreshed every 30 min
 - ↪ **Reply / forward context** — quoted-reply banners (click to scroll to parent), forward indicators, `@<number>` mention highlighting
@@ -342,7 +342,7 @@ DELETE /api/messages                  Body: {userId, ids: [...]}
 GET    /api/messages/:id/edits?userId=N        Per-message edit history
 ```
 
-### Profiles, polls, calls, group activity
+### Profiles, polls, group activity
 
 ```
 GET    /api/chats/:chatId/profile?userId=N           Latest cached profile snapshot
@@ -351,8 +351,9 @@ GET    /api/chats/:chatId/profile/history?userId=N   Full snapshot timeline
 GET    /api/chats/:chatId/group-events?userId=N      Joins/leaves/admin changes
 GET    /api/contacts/:id/changes?userId=N            Phone-number migration log
 GET    /api/polls/:waId/votes?userId=N               Live vote tally
-GET    /api/calls?userId=N&limit=                    Incoming-call log
 ```
+
+Call entries are archived as `messages` rows of `type='call_log'` (with `call_is_video`, `call_duration_sec`, `call_participants` columns) — query them via `GET /api/chats/:chatId/messages` like any other message.
 
 ### Misc
 
@@ -386,7 +387,8 @@ messages              (id, user_id, wa_id, wa_serialized, chat_id, chat_name,
                        quoted_wa_id, mentions, is_forwarded, forward_score,
                        is_ephemeral, is_status, vcards,
                        loc_name, loc_address, loc_url,
-                       edited_at, revoked_at, ack, poll_options)
+                       edited_at, revoked_at, ack, poll_options,
+                       call_is_video, call_duration_sec, call_participants)
 
 chats                 (id, user_id, chat_id, name, is_group, last_msg_at,
                        last_body, last_type, msg_count, updated_at)
@@ -399,7 +401,6 @@ chat_profile_versions (id, user_id, chat_id, pic_filename, pic_hash,
 message_edits         (id, user_id, message_id, prev_body, new_body, edited_at)
 reactions             (id, user_id, msg_wa_id, sender_id, emoji, timestamp)
 poll_votes            (id, user_id, poll_wa_id, voter_id, selected, timestamp)
-calls                 (id, user_id, call_id, peer_id, is_video, is_group, timestamp)
 group_events          (id, user_id, chat_id, event_type, actor_id,
                        target_ids, body, timestamp)
 contact_changes       (id, user_id, old_id, new_id, is_contact, timestamp)

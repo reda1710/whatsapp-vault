@@ -14,9 +14,10 @@ const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
 const READY_TIMEOUT = 160 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
-const PROFILE_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // every 30 min
-const PROFILE_REFRESH_DELAY_MS    = 60 * 1000;      // first sweep after ready (let WA finish syncing)
-const PROFILE_REFRESH_THROTTLE_MS = 500;            // between individual chat refreshes
+const PROFILE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+// Delay before the first sweep so WA finishes its initial chat sync.
+const PROFILE_REFRESH_DELAY_MS    = 60 * 1000;
+const PROFILE_REFRESH_THROTTLE_MS = 500;
 
 const CHROME_BIN =
   process.env.PUPPETEER_EXECUTABLE_PATH ||
@@ -31,14 +32,12 @@ const isHarmless = m => HARMLESS.some(s => m.includes(s));
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Cap to keep an unexpectedly large response from blowing up memory; profile
-// pics are normally < 100 KB, but the URL could in theory point anywhere.
+// Cap on response size — pic URLs are signed but could in theory point anywhere.
 const MAX_PROFILE_PIC_BYTES = 5 * 1024 * 1024;
 
 function downloadBuffer(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, res => {
-      // Follow simple 3xx redirects (WhatsApp's CDN rarely uses them, but cheap to handle).
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         return resolve(downloadBuffer(res.headers.location));
@@ -66,8 +65,7 @@ function downloadBuffer(url) {
 }
 
 function killChrome(userId) {
-  // No shell wrapper: pkill is the only process containing the pattern, and
-  // pkill excludes its own PID — so it can't self-match and kill its parent.
+  // No shell wrapper: pkill excludes its own PID so it can't self-match.
   // Exit codes: 0 = killed something, 1 = no match (both fine).
   const r = spawnSync('pkill', ['-9', '-f', `user-data-dir.*session-${userId}`], { stdio: 'ignore' });
   if (r.error) console.warn(`⚠️  pkill not available for user ${userId}: ${r.error.message}`);
@@ -108,11 +106,12 @@ class Session extends EventEmitter {
     this.stopping      = false;
     this.authenticated = false;
     this.status        = 'offline'; // 'offline' | 'qr' | 'authenticated' | 'online'
-    this.qrData        = null;      // latest QR as base64 PNG data URL
-    this.lateMediaQueue       = []; // Sequential queue for late media fetches. Sending several stickers in quick succession would otherwise schedule N parallel retry chains.
+    this.qrData        = null;
+    // Serialized so a burst of stickers can't spawn N parallel retry chains.
+    this.lateMediaQueue       = [];
     this.processingLateMedia  = false;
-    this._profileInflight     = new Map(); // chatId → Promise — dedupes concurrent refreshProfile calls
-    this.profileRefreshTimer  = null;      // recurring sweep timer (setTimeout, recursive)
+    this._profileInflight     = new Map(); // chatId → in-flight refresh promise
+    this.profileRefreshTimer  = null;
   }
 
   async start() {
@@ -128,14 +127,11 @@ class Session extends EventEmitter {
         dataPath:  AUTH_BASE,
         clientId:  `session-${this.userId}`,
       }),
-      // Cache the WA Web bundle locally so a transient CDN blip during boot
-      // doesn't strand the session on an unloadable build.
+      // Cache the WA Web bundle locally so a CDN blip can't strand boot.
       webVersionCache: { type: 'local' },
-      // Optional: pin to a known-good WA Web build if upgrades start breaking.
+      // Pin a known-good WA Web build here if upgrades start breaking.
       // webVersion: '2.3000.x',
-      //
-      // Uncomment to let the bot reclaim the session if the user opens WA Web
-      // in another tab (instead of disconnecting). Pair with takeoverTimeoutMs.
+      // Reclaim a session that's been opened in another tab. Pair with takeoverTimeoutMs.
       // takeoverOnConflict: true,
       // takeoverTimeoutMs: 10_000,
       puppeteer: {
@@ -163,7 +159,6 @@ class Session extends EventEmitter {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
 
-      // Convert QR string to base64 PNG for the dashboard
       try {
         this.qrData = await qrcodeLib.toDataURL(qr);
       } catch (err) { console.warn(`⚠️  Failed to generate QR data URL:`, err.message); this.qrData = null; }
@@ -171,9 +166,8 @@ class Session extends EventEmitter {
       this._setStatus('qr');
       this.emit('qr', { userId: this.userId, qr: this.qrData });
 
-      // Print full QR to terminal only on the first one. WhatsApp regenerates
-      // the QR every ~20s and the dashboard always shows the latest, so spamming
-      // the terminal with refreshes adds no value.
+      // WA regenerates the QR every ~20s; print only the first one — the
+      // dashboard always shows the latest.
       if (!this._qrPrinted) {
         this._qrPrinted = true;
         qrcode.generate(qr, { small: true });
@@ -186,7 +180,7 @@ class Session extends EventEmitter {
         if (!isActive()) return;
         console.warn(`⏰ [${this.userName}] QR timeout — stopping Chrome (lazy: waiting for user to reconnect)\n`);
         await this._destroy();
-        // status stays 'qr' (red dot); emit so any open modal closes
+        // Status stays 'qr' (red dot); emit so any open modal closes.
         this.emit('qr_timeout', { userId: this.userId });
       }, QR_TIMEOUT);
     });
@@ -194,9 +188,7 @@ class Session extends EventEmitter {
     client.on('authenticated', () => {
       if (!isActive()) return;
 
-      // WhatsApp fires 'authenticated' multiple times in rapid succession
-      // (often 5+ times within a second) — the flag below ensures we only
-      // process the first one and ignore duplicates until reset.
+      // WA fires 'authenticated' 5+ times within a second; ignore duplicates.
       if (this.authenticated || this.status === 'online') return;
       this.authenticated = true;
 
@@ -221,13 +213,12 @@ class Session extends EventEmitter {
     client.on('ready', async () => {
       if (!isActive() || this.status === 'online') return;
 
-      // Set status FIRST so any pending readyTimer or duplicate 'ready' aborts
+      // Set status before any awaits so a duplicate 'ready' aborts.
       this._setStatus('online');
       clearTimeout(this.qrTimer);
       clearTimeout(this.readyTimer);
       this.qrTimer = null; this.readyTimer = null;
 
-      // Pull phone number from WhatsApp and update DB
       try {
         const info  = client.info;
         const phone = info?.wid?.user || null;
@@ -241,8 +232,6 @@ class Session extends EventEmitter {
       const s = db.getStats(this.userId);
       console.log(`✅ [${this.userName}] Live! ${s.total_messages} msgs\n`);
 
-      // Kick off the recurring profile sweep. First run after a short delay so
-      // WA finishes the initial chat sync before we start hammering it.
       this._scheduleProfileRefresh();
     });
 
@@ -252,7 +241,7 @@ class Session extends EventEmitter {
       await this._destroy();
       try { fs.rmSync(path.join(AUTH_BASE, `session-${this.userId}`), { recursive: true, force: true }); }
       catch (err) { console.warn(`⚠️  Failed to remove session files for user ${this.userId}:`, err.message); }
-      // Lazy: stay in 'qr' (red dot), wait for user to click Reconnect
+      // Stay in 'qr' so the Reconnect banner stays visible until the user acts.
       this._setStatus('qr');
       db.updateUser(this.userId, this.userName, null, 'qr');
     });
@@ -260,7 +249,6 @@ class Session extends EventEmitter {
     client.on('disconnected', async reason => {
       if (!isActive() || this.stopping) return;
       console.log(`🔌 [${this.userName}] Disconnected (${reason})\n`);
-      // Lazy: red dot in dropdown, no Chrome until user clicks Reconnect
       this._setStatus('qr');
       db.setBotOffline();
       await this._destroy();
@@ -269,9 +257,8 @@ class Session extends EventEmitter {
     client.on('message',        msg => { if (isActive()) this._handleMessage(msg); });
     client.on('message_create', msg => { if (isActive() && msg.fromMe) this._handleMessage(msg); });
 
-    // Edits + revokes — both events arrive after the original message is
-    // archived. recordEdit/recordRevoke are idempotent and no-op if the
-    // message wasn't captured (e.g. arrived before the bot was started).
+    // recordEdit/recordRevoke no-op if the original wasn't captured (e.g. it
+    // arrived before the bot started).
     client.on('message_edit', (msg, newBody, prevBody) => {
       if (!isActive()) return;
       const waId = msg?.id?.id || null;
@@ -292,8 +279,7 @@ class Session extends EventEmitter {
       } catch (e) { console.warn(`⚠️  [${this.userName}] revoke capture failed:`, e.message.split('\n')[0]); }
     });
 
-    // Reactions: payload shape is `{ id, msgId, senderId, reaction, timestamp, ... }`.
-    // `reaction === ''` means the user removed their reaction; we still upsert
+    // reaction === '' means the user removed their reaction; we still upsert
     // so the row reflects the current state.
     client.on('message_reaction', r => {
       if (!isActive() || !r) return;
@@ -306,17 +292,15 @@ class Session extends EventEmitter {
       } catch (e) { console.warn(`⚠️  [${this.userName}] reaction capture failed:`, e.message.split('\n')[0]); }
     });
 
-    // Acks: latest delivery state (-1=err, 0=pending, 1=server, 2=device, 3=read, 4=played).
-    // Updates are cheap (single UPDATE) and high-frequency for popular chats.
+    // ack: -1=err, 0=pending, 1=server, 2=device, 3=read, 4=played.
     client.on('message_ack', (msg, ack) => {
       if (!isActive()) return;
       const waId = msg?.id?.id || null;
       if (!waId) return;
       try { db.recordAck(this.userId, waId, ack); }
-      catch (e) { /* swallow — ack churn isn't worth log noise */ }
+      catch (e) { /* ack churn isn't worth log noise */ }
     });
 
-    // Poll votes: payload is a `PollVote` { voter, selectedOptions, parentMsgKey, ... }.
     client.on('vote_update', vote => {
       if (!isActive() || !vote) return;
       const pollWaId = vote.parentMsgKey?.id || vote.parentMessage?.id?.id || null;
@@ -328,29 +312,6 @@ class Session extends EventEmitter {
       } catch (e) { console.warn(`⚠️  [${this.userName}] vote capture failed:`, e.message.split('\n')[0]); }
     });
 
-    // Calls — wwebjs's incoming_call event is unreliable and never fires for
-    // outgoing calls. Both directions show up as call_log messages instead;
-    // _processMessage handles those. We keep this handler as a backup so
-    // ringing notifications (which arrive before the call_log) still get
-    // recorded. recordCall dedupes by call_id / (peer, ±5s) so the two
-    // sources can't double-count.
-    client.on('incoming_call', call => {
-      if (!isActive() || !call) return;
-      try {
-        db.recordCall(this.userId, {
-          call_id:   call.id      || null,
-          peer_id:   call.from || null,
-          from_me:   !!call.fromMe,
-          is_video:  !!call.isVideo,
-          is_group:  !!call.isGroup,
-          timestamp: call.timestamp || Math.floor(Date.now()/1000),
-        });
-        this.emit('call', { userId: this.userId });
-      } catch (e) { console.warn(`⚠️  [${this.userName}] call capture failed:`, e.message.split('\n')[0]); }
-    });
-
-    // Group churn — joins, leaves, subject/desc updates, admin promotions,
-    // and pending join requests. All reuse the same notification shape.
     const onGroupNotif = (type) => (n) => {
       if (!isActive() || !n) return;
       try {
@@ -370,7 +331,6 @@ class Session extends EventEmitter {
     client.on('group_admin_changed',       onGroupNotif('admin_change'));
     client.on('group_membership_request',  onGroupNotif('membership_request'));
 
-    // Contact migrated to a new WA number. Persist for the new id's profile.
     client.on('contact_changed', (msg, oldId, newId, isContact) => {
       if (!isActive()) return;
       try { db.recordContactChange(this.userId, oldId, newId, isContact, msg?.timestamp); }
@@ -447,12 +407,16 @@ class Session extends EventEmitter {
     this._processing = false;
   }
 
-  async _processMessage(msg) {
+  // Archive the message to the DB. Reused by both live events and the
+  // fetchMessages-driven sweep. Skips live-only side effects (SSE toast,
+  // late-media retry queue) when source !== 'live'.
+  async _archiveMessage(msg, opts = {}) {
+    const isLive = opts.source !== 'backfill';
     try {
       const chat    = await this._retry(() => msg.getChat());
       let   contact = null;
       try { contact = await this._retry(() => msg.getContact()); }
-      catch (e) { if (e.message.includes('getAlternateUserWid') || e.message.includes('Invalid get call')) return; throw e; }
+      catch (e) { if (e.message.includes('getAlternateUserWid') || e.message.includes('Invalid get call')) return null; throw e; }
 
       const sender = contact?.pushname || contact?.name || contact?.number || msg.from?.split('@')[0] || 'Unknown';
 
@@ -468,8 +432,7 @@ class Session extends EventEmitter {
         mediaData: null, mimetype: null,
         lat:           msg.location?.latitude  || null,
         lng:           msg.location?.longitude || null,
-        // quotedStanzaID is the bare id of the parent message; cross-references
-        // the wa_id column. Lives on the documented rawData proto accessor.
+        // Bare id of the parent message — joins back to messages.wa_id.
         quoted_wa_id:  msg.hasQuotedMsg ? (msg.rawData?.quotedStanzaID || null) : null,
         mentions:      (msg.mentionedIds && msg.mentionedIds.length) ? JSON.stringify(msg.mentionedIds) : null,
         is_forwarded:  msg.isForwarded ? 1 : 0,
@@ -483,6 +446,19 @@ class Session extends EventEmitter {
       };
       const chatInfo = { name: chat.name || sender, isGroup: chat.isGroup };
 
+      // Call-log fields mirror the Call class (https://docs.wwebjs.dev/Call.html).
+      // msg.duration is documented; the rawData fields are best-effort.
+      if (msg.type === 'call_log') {
+        const d = msg.rawData || {};
+        entry.call_is_video     = (d.isVideoCall || d.callIsVideo) ? 1 : 0;
+        const docDuration = msg.duration != null ? parseInt(msg.duration, 10) : NaN;
+        entry.call_duration_sec = Number.isFinite(docDuration) ? docDuration
+                                : typeof d.callDuration === 'number' ? d.callDuration
+                                : null;
+        entry.call_participants = Array.isArray(d.callParticipants) && d.callParticipants.length
+                                ? JSON.stringify(d.callParticipants) : null;
+      }
+
       if (msg.hasMedia) {
         try {
           const media = await this._retry(() => msg.downloadMedia(), 4, 1000);
@@ -495,73 +471,45 @@ class Session extends EventEmitter {
       }
 
       const { mediaFile, messageId } = db.saveMessage(this.userId, entry, chatInfo);
-      // If message has media but it wasn't downloaded successfully
-      // schedule retries to fetch it later.
-      // This can happen when WhatsApp's CDN is slow to propagate media.
-      if (msg.hasMedia && !mediaFile && messageId) {
+
+      // Live-only: schedule a late-media retry. For backfill the CDN URL is
+      // almost certainly expired — retries would just waste time.
+      if (isLive && msg.hasMedia && !mediaFile && messageId) {
         this._enqueueLateMediaFetch(msg, messageId, chatInfo);
       }
-      // Poll creation: stash the option strings so the dashboard can render
-      // a tally. Vote events arrive separately via vote_update.
+
       if (msg.type === 'poll_creation' && entry.wa_id) {
         const opts = (msg.pollOptions || msg.options || []).map(o => o?.name || o?.localId?.toString() || String(o));
         if (opts.length) db.recordPollOptions(this.userId, entry.wa_id, opts);
       }
-      // Call log — wwebjs surfaces every call (incoming AND outgoing) as a
-      // call_log message. The only documented call-related surface is
-      // msg.duration (string seconds) and msg.rawData (raw proto). The
-      // outcome / video-flag / subtype fields below are read off rawData
-      // best-effort because wwebjs doesn't document them — they may rename
-      // or disappear on upgrades, and the body-string "missed" check is
-      // locale-dependent.
-      if (msg.type === 'call_log') {
-        const d = msg.rawData || {};
-        const callType = d.callType || d.callOutcome || d.subtype || null;
-        const isVideo = !!(d.isVideoCall || d.callIsVideo || /video/i.test(callType || ''));
-        const subtype = d.callOutcome
-                     || d.subtype
-                     || ((msg.body || '').toLowerCase().includes('missed') ? 'missed' : null);
-        const docDuration = msg.duration != null ? parseInt(msg.duration, 10) : NaN;
-        const rawDuration = d.callDuration ?? d.duration ?? null;
-        const duration = Number.isFinite(docDuration) ? docDuration
-                       : typeof rawDuration === 'number' ? rawDuration
-                       : null;
-        try {
-          db.recordCall(this.userId, {
-            call_id:      entry.wa_id     || null,
-            peer_id:      entry.chat_id   || null,
-            from_me:      msg.fromMe,
-            is_video:     isVideo,
-            is_group:     !!chatInfo.isGroup,
-            subtype,
-            duration_sec: duration,
-            timestamp:    entry.timestamp,
-          });
-          this.emit('call', { userId: this.userId });
-        } catch (e) { console.warn(`⚠️  [${this.userName}] call_log capture failed:`, e.message.split('\n')[0]); }
-      }
-      const ICONS = { chat:'💬',ptt:'🎙️',audio:'🎵',image:'🖼️',video:'🎬',document:'📄',sticker:'🎭',location:'📍',vcard:'👤' };
-      console.log(`${ICONS[msg.type]||'📨'} [${this.userName}/${chatInfo.name}] ${sender}: ${(entry.body||'<'+msg.type+'>').substring(0,60)}${mediaFile?' [saved]':''}`);
 
-      // Emit for SSE notifications to dashboard
-      this.emit('message', {
-        userId:   this.userId,
-        userName: this.userName,
-        chatName: chatInfo.name,
-        sender,
-        body:     entry.body,
-        type:     msg.type,
-        fromMe:   msg.fromMe,
-      });
+      const ICONS = { chat:'💬',ptt:'🎙️',audio:'🎵',image:'🖼️',video:'🎬',document:'📄',sticker:'🎭',location:'📍',vcard:'👤',call_log:'📞' };
+      const tag = isLive ? '' : ' [backfill]';
+      console.log(`${ICONS[msg.type]||'📨'} [${this.userName}/${chatInfo.name}]${tag} ${sender}: ${(entry.body||'<'+msg.type+'>').substring(0,60)}${mediaFile?' [saved]':''}`);
 
+      return { messageId, mediaFile, entry, chatInfo, sender };
     } catch (e) {
-      if (e.message.includes('getAlternateUserWid') || e.message.includes('Invalid get call') || isHarmless(e.message)) return;
-      console.error(`❌ [${this.userName}] Message error:`, e.message.split('\n')[0]);
+      if (e.message.includes('getAlternateUserWid') || e.message.includes('Invalid get call') || isHarmless(e.message)) return null;
+      console.error(`❌ [${this.userName}] Archive error:`, e.message.split('\n')[0]);
+      return null;
     }
   }
 
-  // Enqueue a message that needs a delayed media fetch. Bursts of stickers
-  // pile up in this queue and are processed strictly one at a time.
+  async _processMessage(msg) {
+    const result = await this._archiveMessage(msg, { source: 'live' });
+    if (!result) return;
+    const { entry, chatInfo, sender } = result;
+    this.emit('message', {
+      userId:   this.userId,
+      userName: this.userName,
+      chatName: chatInfo.name,
+      sender,
+      body:     entry.body,
+      type:     msg.type,
+      fromMe:   msg.fromMe,
+    });
+  }
+
   _enqueueLateMediaFetch(msg, messageId, chatInfo) {
     this.lateMediaQueue.push({ msg, messageId, chatInfo });
     if (!this.processingLateMedia) this._drainLateMediaQueue();
@@ -575,7 +523,6 @@ class Session extends EventEmitter {
       const remaining = this.lateMediaQueue.length;
       if (remaining > 0) console.log(`⏳ [${this.userName}] Late-media queue: ${remaining + 1} pending`);
 
-      // Try at increasing delays — covers fast CDN appearance and slow ones
       const delays = [3000, 8000, 20000];
       for (const delay of delays) {
         await sleep(delay);
@@ -602,9 +549,8 @@ class Session extends EventEmitter {
     this.processingLateMedia = false;
   }
 
-  // Pull the contact/group profile from WhatsApp Web, dedupe against the last
-  // stored snapshot, and return the latest version row. Concurrent calls for
-  // the same chat share one in-flight promise so a click-spam can't fan out.
+  // Concurrent calls for the same chat share one in-flight promise so a
+  // click-spam can't fan out.
   async refreshProfile(chatId) {
     if (!this.client) throw new Error('Session offline');
     if (this._profileInflight.has(chatId)) return this._profileInflight.get(chatId);
@@ -618,10 +564,8 @@ class Session extends EventEmitter {
     const chat = await this._retry(() => this.client.getChatById(chatId));
 
     let picUrl = null;
-    // Skip only bogus placeholder ids (e.g. '0@c.us' system-author): a missing
-    // or all-zero user-part hangs the WA Web JS call until Puppeteer's
-    // protocolTimeout fires. Real ids — including legacy hyphenated group ids
-    // and @lid privacy ids — still go through.
+    // '0@c.us' and similar all-zero placeholders hang the WA Web JS call
+    // until Puppeteer's protocolTimeout fires. Skip those only.
     const userPart = String(chatId || '').split('@')[0];
     if (userPart && !/^0+$/.test(userPart)) {
       try { picUrl = await this.client.getProfilePicUrl(chatId); }
@@ -640,10 +584,8 @@ class Session extends EventEmitter {
           isSuperAdmin: !!p?.isSuperAdmin,
         })).filter(p => p.id);
 
-        // Resolve the real E.164 phone for each participant. Required because
-        // WhatsApp Web increasingly hands out @lid ids whose user-part is NOT
-        // the phone number — only Contact.number gives the real one. These
-        // are local-store lookups, so parallel fan-out is fine.
+        // @lid ids' user-part is not the phone number — only the Contact
+        // record carries the real one. Local-store lookups, fan out freely.
         participants = await Promise.all(base.map(async p => {
           let number = null;
           try {
@@ -655,7 +597,7 @@ class Session extends EventEmitter {
             if (!number) {
               number = (c?.id?.server === 'c.us' ? c?.number || c?.id?.user : null) || null;
             }
-          } catch {/* contact not in store yet — leave null */}
+          } catch {/* contact not in store yet */}
           return { ...p, number };
         }));
       }
@@ -665,17 +607,14 @@ class Session extends EventEmitter {
         isBusiness = !!contact?.isBusiness;
         pushname   = contact?.pushname  || null;
         shortName  = contact?.shortName || null;
-        // BusinessContact.businessProfile carries catalog/business metadata
-        // (address, hours, websites, vertical). Stash whatever's there.
         if (contact?.businessProfile) businessProfile = contact.businessProfile;
-        // getFormattedNumber() does a real WA API lookup — it returns the actual
-        // phone (e.g. "+1 (234) 5678-901") regardless of id format, so use it first.
-        // contact.number for @lid contacts returns the lid user-part (NOT a
-        // phone), so only trust it when the contact's own server is 'c.us'.
+        // getFormattedNumber returns the real phone regardless of id format;
+        // contact.number for @lid contacts returns the lid user-part instead,
+        // so only fall back to it when the server is 'c.us'.
         try {
           const fmt = await contact.getFormattedNumber();
           if (fmt) phone = fmt.replace(/[\s()\-]/g, '') || null;
-        } catch { /* not available in this wwebjs build */ }
+        } catch { /* not in this wwebjs build */ }
         if (!phone) {
           phone = (contact?.id?.server === 'c.us' ? contact?.number || contact?.id?.user : null)
                || (chat?.id?.server    === 'c.us' ? chat?.id?.user : null)
@@ -709,8 +648,8 @@ class Session extends EventEmitter {
   }
 
   // ── Background profile-refresh scheduler ────────────────────────────────
-  // setTimeout-recursive (not setInterval) so a slow sweep can't overlap
-  // with the next tick. Idempotent — calling again replaces any existing timer.
+  // Recursive setTimeout (not setInterval) so a slow sweep can't overlap
+  // the next tick. Idempotent — calling again replaces any pending timer.
   _scheduleProfileRefresh() {
     if (this.profileRefreshTimer) clearTimeout(this.profileRefreshTimer);
     const tick = async () => {
@@ -723,14 +662,68 @@ class Session extends EventEmitter {
     this.profileRefreshTimer = setTimeout(tick, PROFILE_REFRESH_DELAY_MS);
   }
 
-  // Two-phase sweep: refresh every chat, then refresh every unique group
-  // participant that wasn't already a top-level chat. refreshProfile dedupes
-  // both content-wise (no rewrite if unchanged) and in-flight-wise (shares the
-  // outstanding Promise with any concurrent user click).
+  // Diff what wwebjs holds for this chat against our DB. Backfills new
+  // messages, records edits (body change), and flags revokes for any DB row
+  // inside the fetched window that's missing from the fetch.
+  async _reconcileChatMessages(chatId) {
+    if (!this.client) return;
+    const chat = await this._retry(() => this.client.getChatById(chatId));
+    if (!chat) return;
+    let fetched;
+    try {
+      fetched = await this._retry(() => chat.fetchMessages({ limit: Infinity }));
+    } catch (e) {
+      if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] fetchMessages(${chatId}) failed:`, e.message.split('\n')[0]);
+      return;
+    }
+    if (!fetched?.length) return;
+
+    const fetchedIds = new Set();
+    let oldestTs = Infinity;
+    for (const m of fetched) {
+      const waId = m.id?.id;
+      if (!waId) continue;
+      fetchedIds.add(waId);
+      if (typeof m.timestamp === 'number' && m.timestamp < oldestTs) oldestTs = m.timestamp;
+    }
+    if (!Number.isFinite(oldestTs)) return;
+
+    let added = 0, edited = 0, revoked = 0;
+    for (const m of fetched) {
+      if (this.stopping || !this.client) return;
+      const waId = m.id?.id;
+      if (!waId) continue;
+      const existing = db.findMessageByWaId(this.userId, waId);
+      if (!existing) {
+        const r = await this._archiveMessage(m, { source: 'backfill' });
+        if (r?.messageId) added++;
+      } else if ((existing.body || null) !== (m.body || null)) {
+        db.recordEdit(this.userId, waId, existing.body, m.body, m.timestamp || Math.floor(Date.now()/1000));
+        edited++;
+      }
+    }
+
+    // Anything in our DB inside the fetched window but absent from the fetch
+    // is a delete-for-everyone we missed live. Older rows could be out of
+    // wwebjs's range — leave them alone.
+    const localInWindow = db.getMessagesInWindow(this.userId, chatId, oldestTs);
+    for (const row of localInWindow) {
+      if (!row.wa_id || row.revoked_at || fetchedIds.has(row.wa_id)) continue;
+      db.recordRevoke(this.userId, row.wa_id, Math.floor(Date.now()/1000));
+      revoked++;
+    }
+
+    if (added || edited || revoked) {
+      console.log(`🪡  [${this.userName}/${chatId}] reconcile: +${added} ~${edited} -${revoked}`);
+    }
+  }
+
+  // Two-phase: every chat (profile + message reconcile), then every unique
+  // group participant not already a top-level chat (profile only).
   async _refreshAllProfiles() {
     const chats = db.getChats(this.userId);
     if (chats.length === 0) return;
-    console.log(`🔄 [${this.userName}] Profile sweep: ${chats.length} chats`);
+    console.log(`🔄 [${this.userName}] Sweep: ${chats.length} chats`);
 
     const refreshedIds = new Set();
 
@@ -738,6 +731,8 @@ class Session extends EventEmitter {
       if (this.stopping || !this.client) return;
       try { await this.refreshProfile(c.chat_id); refreshedIds.add(c.chat_id); }
       catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] profile refresh ${c.chat_id} failed:`, e.message.split('\n')[0]); }
+      try { await this._reconcileChatMessages(c.chat_id); }
+      catch (e) { if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] reconcile ${c.chat_id} failed:`, e.message.split('\n')[0]); }
       await sleep(PROFILE_REFRESH_THROTTLE_MS);
     }
 
@@ -751,7 +746,7 @@ class Session extends EventEmitter {
         for (const p of arr) {
           if (p?.id && !refreshedIds.has(p.id)) memberIds.add(p.id);
         }
-      } catch { /* malformed JSON — skip */ }
+      } catch { /* malformed JSON */ }
     }
 
     if (memberIds.size > 0) {
@@ -791,7 +786,7 @@ class SessionManager extends EventEmitter {
     const users = db.getAllUsers();
     for (const user of users) {
       await this.startSession(user.id, user.name);
-      await sleep(3000); // stagger startups to avoid RAM spike
+      await sleep(3000); // stagger to avoid a RAM spike
     }
     if (users.length === 0) {
       console.log('ℹ️  No users yet — add one from the dashboard\n');
@@ -800,9 +795,9 @@ class SessionManager extends EventEmitter {
 
   async startSession(userId, userName) {
     let session = this.sessions.get(userId);
-    if (session && session.client) return session; // already running with live Chrome
+    if (session && session.client) return session;
     if (!session) {
-      // userName is required for brand-new sessions; for reconnects we can fall back to DB
+      // userName is required on first start; reconnects can fall back to DB.
       if (!userName) {
         const u = db.getAllUsers().find(x => x.id === userId);
         if (!u) return null;
@@ -811,7 +806,6 @@ class SessionManager extends EventEmitter {
       session = new Session(userId, userName);
       this.sessions.set(userId, session);
 
-      // Bubble up events to the manager
       session.on('qr',              e => this.emit('qr',              e));
       session.on('ready',           e => this.emit('ready',           e));
       session.on('status',          e => this.emit('status',          e));
@@ -821,15 +815,13 @@ class SessionManager extends EventEmitter {
       session.on('message_revoke',  e => this.emit('message_revoke',  e));
       session.on('reaction',        e => this.emit('reaction',        e));
       session.on('vote_update',     e => this.emit('vote_update',     e));
-      session.on('call',            e => this.emit('call',            e));
     }
-    session.start(); // async — don't await, returns immediately
+    session.start(); // async, fire-and-forget
     return session;
   }
 
-  // Stop Chrome but keep the user record. Used when the user closes the QR
-  // modal without scanning — we want the dropdown to stay red ('qr'), not
-  // gray ('offline'), so the Reconnect banner remains visible.
+  // Stop Chrome but keep the user in 'qr' so the Reconnect banner stays up
+  // — used when the user dismisses the QR modal without scanning.
   async disconnectSession(userId) {
     const s = this.sessions.get(userId);
     if (!s) return;
@@ -851,8 +843,7 @@ class SessionManager extends EventEmitter {
       await session.stop();
       this.sessions.delete(userId);
     }
-    // Remove session auth folder
-    try { fs.rmSync(path.join(AUTH_BASE, `session-${userId}`), { recursive: true, force: true }); } 
+    try { fs.rmSync(path.join(AUTH_BASE, `session-${userId}`), { recursive: true, force: true }); }
     catch (err) { console.warn(`⚠️  Failed to remove session files for user ${userId}:`, err.message); }
     db.deleteUser(userId);
   }
