@@ -37,7 +37,15 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 ## Features
 
 - 🔗 **Multi-account** — link multiple WhatsApp numbers, each in its own isolated session
-- 💬 **Captures everything** — text, voice notes, photos, videos, stickers, documents, locations, contact cards
+- 💬 **Captures everything** — text, voice notes, photos, videos, stickers, documents, locations (with name/address/url), structured contact cards, polls
+- 📝 **Edit & delete archive** — `message_edit` keeps the prev→new history, `message_revoke_everyone` flags the deletion but preserves the original body
+- 💚 **Reactions** — every reaction is archived per sender; aggregated chips render under each message
+- ✓✓ **Read receipts** — server / device / read / played ticks tracked on outbound messages
+- 📊 **Polls** — option list captured at creation, live tally updates as votes arrive
+- 📞 **Call log** — `incoming_call` events recorded with peer, time, video/group flags
+- 👥 **Group activity log** — joins, leaves, subject/desc changes, admin promotions, and pending join requests
+- 🪪 **Profile snapshots** — name, phone, about, description, business profile (address/hours/websites), and avatar versioned over time with diff-based dedupe; auto-refreshed every 30 min
+- ↪ **Reply / forward context** — quoted-reply banners (click to scroll to parent), forward indicators, `@<number>` mention highlighting
 - 🔔 **Live notifications** — toast in the dashboard for every new message, with optional outgoing-message alerts
 - 🔍 **Full-text search** — scoped per account, rate-limited to 30 queries / 60 s
 - 🗑 **Bulk delete** — clear individual messages or entire conversations (media files removed too)
@@ -48,6 +56,7 @@ Connect any number of WhatsApp accounts and capture every message — text, voic
 - 🖼 **Image lightbox** — click any photo to view full-size
 - 📱 **Mobile-ready** — responsive single-pane layout, touch-friendly tap targets, full-screen QR modal
 - 🔄 **Lazy reconnect** — disconnected sessions stay idle (no Chrome RAM) until you click Reconnect
+- 🪄 **Stable scroll** — fingerprint-based diff render means edits, late-media, reactions, and polls update in place without yanking your scroll position
 
 ---
 
@@ -291,7 +300,7 @@ Generated at runtime:
 
 **Late media** — Newly-sent stickers and freshly-captured photos sometimes hit WhatsApp's CDN a few seconds after the message event. If the initial download returns nothing, the message is queued for delayed retry at 3s/8s/20s and patched into the existing DB row when the file is finally available. Bursts of stickers or photos are processed sequentially to avoid overwhelming the WhatsApp bridge.
 
-**Real-time UI** — The dashboard uses Server-Sent Events (`/api/events`) to receive `qr`, `ready`, `status`, and `message` events as they happen. Toasts appear instantly when any account receives a message.
+**Real-time UI** — The dashboard uses Server-Sent Events (`/api/events`) to receive `qr`, `ready`, `status`, `message`, `message_edit`, `message_revoke`, `reaction`, and `vote_update` events as they happen. Each message bubble carries a fingerprint (id + body + edited_at + revoked_at + media_file + ack + reactions); the diff render only swaps DOM nodes whose fingerprint changed, so live updates land without resetting your scroll position or the playhead of an open video / voice note.
 
 **Resilience** — Sessions handle transient WhatsApp Web errors (`Session closed`, `Target closed`, etc.) without flapping, and recover gracefully from Chrome OOM kills (with a longer cooldown so the kernel can reclaim memory). When a session disconnects or QR generation times out it goes "lazy" — Chrome is fully torn down and the user status shows a red dot until the user clicks **Reconnect**, so idle accounts don't burn RAM.
 
@@ -330,6 +339,19 @@ GET    /api/chats?userId=N
 GET    /api/chats/:chatId/messages?userId=N&limit=&offset=
 DELETE /api/chats/:chatId?userId=N
 DELETE /api/messages                  Body: {userId, ids: [...]}
+GET    /api/messages/:id/edits?userId=N        Per-message edit history
+```
+
+### Profiles, polls, calls, group activity
+
+```
+GET    /api/chats/:chatId/profile?userId=N           Latest cached profile snapshot
+POST   /api/chats/:chatId/profile/refresh?userId=N   Force a live WA fetch (deduped)
+GET    /api/chats/:chatId/profile/history?userId=N   Full snapshot timeline
+GET    /api/chats/:chatId/group-events?userId=N      Joins/leaves/admin changes
+GET    /api/contacts/:id/changes?userId=N            Phone-number migration log
+GET    /api/polls/:waId/votes?userId=N               Live vote tally
+GET    /api/calls?userId=N&limit=                    Incoming-call log
 ```
 
 ### Misc
@@ -339,7 +361,8 @@ GET    /api/bot-status                {online, beat_at}
 GET    /api/stats?userId=N            Counts (omit userId for global stats)
 GET    /api/search?userId=N&q=...     Full-text search (max 30/min/user)
 GET    /api/media/:filename           Authenticated media stream (HTTP range supported)
-GET    /api/events                    SSE: qr / ready / status / message / qr_timeout
+GET    /api/events                    SSE: qr / ready / status / message / qr_timeout /
+                                          message_edit / message_revoke / reaction / vote_update
 ```
 
 ### Example
@@ -352,18 +375,40 @@ curl -H "X-API-Key: $KEY" http://localhost:3001/api/users
 
 ## Database schema
 
-Three tables, all scoped by `user_id` with FK cascade:
+All user data lives in a single `vault.db` SQLite file, scoped by `user_id` with FK cascade so deleting a user wipes everything they own.
 
 ```sql
-users      (id, name, phone, status, created_at)
-messages   (id, user_id, wa_id, chat_id, chat_name, from_me, sender,
-            body, type, timestamp, media_file, mimetype, filename, lat, lng)
-chats      (id, user_id, chat_id, name, is_group, last_msg_at,
-            last_body, last_type, msg_count, updated_at)
-bot_status (id, state, beat_at)
+users                 (id, name, phone, status, created_at)
+
+messages              (id, user_id, wa_id, wa_serialized, chat_id, chat_name,
+                       from_me, sender, body, type, timestamp,
+                       media_file, mimetype, filename, lat, lng,
+                       quoted_wa_id, mentions, is_forwarded, forward_score,
+                       is_ephemeral, is_status, vcards,
+                       loc_name, loc_address, loc_url,
+                       edited_at, revoked_at, ack, poll_options)
+
+chats                 (id, user_id, chat_id, name, is_group, last_msg_at,
+                       last_body, last_type, msg_count, updated_at)
+
+chat_profile_versions (id, user_id, chat_id, pic_filename, pic_hash,
+                       name, phone, about, description, is_business,
+                       participants, pushname, short_name, business_profile,
+                       fetched_at)
+
+message_edits         (id, user_id, message_id, prev_body, new_body, edited_at)
+reactions             (id, user_id, msg_wa_id, sender_id, emoji, timestamp)
+poll_votes            (id, user_id, poll_wa_id, voter_id, selected, timestamp)
+calls                 (id, user_id, call_id, peer_id, is_video, is_group, timestamp)
+group_events          (id, user_id, chat_id, event_type, actor_id,
+                       target_ids, body, timestamp)
+contact_changes       (id, user_id, old_id, new_id, is_contact, timestamp)
+bot_status            (id, state, beat_at)
 ```
 
-Indexed on `(user_id)`, `(user_id, chat_id)`, `timestamp`, and `type`. WAL mode is enabled with `wal_autocheckpoint=100` for predictable I/O on burstable VMs.
+Schema migrates additively at startup via an `ensureColumn` / `CREATE TABLE IF NOT EXISTS` pattern — new versions of the bot can be dropped in over an existing vault without manual migration steps.
+
+Indexed on `(user_id)`, `(user_id, chat_id)`, `(user_id, chat_id, timestamp)`, `timestamp`, and `type` for messages, plus per-table indexes on the new tables (e.g. `reactions(user_id, msg_wa_id)`, `group_events(user_id, chat_id, timestamp)`). WAL mode is enabled with `wal_autocheckpoint=100` for predictable I/O on burstable VMs.
 
 ---
 
