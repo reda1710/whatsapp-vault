@@ -412,6 +412,11 @@ class Session extends EventEmitter {
   // late-media retry queue) when source !== 'live'.
   async _archiveMessage(msg, opts = {}) {
     const isLive = opts.source !== 'backfill';
+    // Bail before any network work if we already have this wa_id — covers
+    // user-deleted (vault_deleted_at) rows the sweep mustn't re-hydrate AND
+    // live duplicates that would otherwise re-download media for no reason.
+    const waId = msg.id?.id || null;
+    if (waId && db.findMessageByWaId(this.userId, waId)) return null;
     try {
       const chat    = await this._retry(() => msg.getChat());
       let   contact = null;
@@ -741,6 +746,10 @@ class Session extends EventEmitter {
         if (r?.messageId) added++;
         continue;
       }
+      // Vault-deleted by the user — leave it alone (no edit detection, no
+      // re-archive). The row exists only as a tombstone so the sweep
+      // remembers we already handled it.
+      if (existing.vault_deleted_at) continue;
       if (existing.revoked_at) continue;
       if (isRevokedStub) {
         db.recordRevoke(this.userId, waId, m.timestamp || Math.floor(Date.now()/1000));

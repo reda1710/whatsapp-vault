@@ -187,6 +187,11 @@ ensureColumn('messages', 'call_is_video',     'INTEGER');
 ensureColumn('messages', 'call_duration_sec', 'INTEGER');
 ensureColumn('messages', 'call_participants', 'TEXT');
 
+// User-initiated delete from the dashboard. The row is kept (with content
+// fields nulled out) so the sweep's reconcile recognises the wa_id and
+// doesn't re-backfill the message or its media.
+ensureColumn('messages', 'vault_deleted_at', 'INTEGER');
+
 // ── Prepared statements ──────────────────────────────────────────────────────
 const stmts = {
   insertUser:    db.prepare(`INSERT INTO users (name) VALUES (?) RETURNING *`),
@@ -271,31 +276,32 @@ const stmts = {
 
   getMessages: db.prepare(`
     SELECT * FROM (
-      SELECT * FROM messages WHERE user_id = ? AND chat_id = ?
+      SELECT * FROM messages WHERE user_id = ? AND chat_id = ? AND vault_deleted_at IS NULL
       ORDER BY timestamp DESC LIMIT ? OFFSET ?
     ) ORDER BY timestamp ASC
   `),
 
   searchMessages: db.prepare(`
-    SELECT * FROM messages WHERE user_id = ? AND body LIKE ? ORDER BY timestamp DESC LIMIT 100
+    SELECT * FROM messages WHERE user_id = ? AND body LIKE ? AND vault_deleted_at IS NULL
+    ORDER BY timestamp DESC LIMIT 100
   `),
 
   getStats: db.prepare(`
     SELECT
-      (SELECT COUNT(*) FROM messages WHERE user_id = ?)                                                                  AS total_messages,
-      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND type IN ('ptt','audio'))                                      AS voice_notes,
-      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND type IN ('image','video'))                                    AS media_files,
-      (SELECT COUNT(*) FROM chats   WHERE user_id = ?)                                                                   AS total_chats,
-      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND from_me = 0 AND timestamp > strftime('%s','now') - 86400)    AS today_received
+      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND vault_deleted_at IS NULL)                                                                AS total_messages,
+      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND vault_deleted_at IS NULL AND type IN ('ptt','audio'))                                    AS voice_notes,
+      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND vault_deleted_at IS NULL AND type IN ('image','video'))                                  AS media_files,
+      (SELECT COUNT(*) FROM chats   WHERE user_id = ?)                                                                                              AS total_chats,
+      (SELECT COUNT(*) FROM messages WHERE user_id = ? AND vault_deleted_at IS NULL AND from_me = 0 AND timestamp > strftime('%s','now') - 86400)   AS today_received
   `),
 
   getGlobalStats: db.prepare(`
     SELECT
-      (SELECT COUNT(*) FROM messages)                                                                AS total_messages,
-      (SELECT COUNT(*) FROM messages WHERE type IN ('ptt','audio'))                                  AS voice_notes,
-      (SELECT COUNT(*) FROM messages WHERE type IN ('image','video'))                                AS media_files,
-      (SELECT COUNT(*) FROM chats)                                                                   AS total_chats,
-      (SELECT COUNT(*) FROM messages WHERE from_me = 0 AND timestamp > strftime('%s','now') - 86400) AS today_received
+      (SELECT COUNT(*) FROM messages WHERE vault_deleted_at IS NULL)                                                              AS total_messages,
+      (SELECT COUNT(*) FROM messages WHERE vault_deleted_at IS NULL AND type IN ('ptt','audio'))                                  AS voice_notes,
+      (SELECT COUNT(*) FROM messages WHERE vault_deleted_at IS NULL AND type IN ('image','video'))                                AS media_files,
+      (SELECT COUNT(*) FROM chats)                                                                                                AS total_chats,
+      (SELECT COUNT(*) FROM messages WHERE vault_deleted_at IS NULL AND from_me = 0 AND timestamp > strftime('%s','now') - 86400) AS today_received
   `),
 
   setBotStatus: db.prepare(`UPDATE bot_status SET state = ?, beat_at = strftime('%s','now') WHERE id = 1`),
@@ -303,11 +309,13 @@ const stmts = {
 
   getMimetypeForFile: db.prepare(`SELECT mimetype FROM messages WHERE media_file = ? LIMIT 1`),
 
-  findMessageByWaId: db.prepare(`SELECT id, body, revoked_at FROM messages WHERE user_id = ? AND wa_id = ? LIMIT 1`),
-  // Sweep's revoke pass — scoped to a chat + minimum timestamp.
+  findMessageByWaId: db.prepare(`SELECT id, body, revoked_at, vault_deleted_at FROM messages WHERE user_id = ? AND wa_id = ? LIMIT 1`),
+  // Sweep's revoke pass — scoped to a chat + minimum timestamp. Skip
+  // user-deleted rows; we don't want the sweep to mark them as revoked.
   getMessagesInWindow: db.prepare(`
     SELECT id, wa_id, revoked_at FROM messages
-    WHERE user_id = ? AND chat_id = ? AND timestamp >= ? AND wa_id IS NOT NULL
+    WHERE user_id = ? AND chat_id = ? AND timestamp >= ?
+      AND wa_id IS NOT NULL AND vault_deleted_at IS NULL
   `),
   insertMessageEdit: db.prepare(`
     INSERT INTO message_edits (user_id, message_id, prev_body, new_body, edited_at)
@@ -518,21 +526,47 @@ function deleteMessages(userId, ids) {
 
   const ph = safeIds.map(() => '?').join(',');
   const rows = db.prepare(`SELECT media_file FROM messages WHERE user_id = ? AND id IN (${ph})`).all(userId, ...safeIds);
-  rows.forEach(r => { 
-    if (r.media_file) { 
+  rows.forEach(r => {
+    if (r.media_file) {
       try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
-      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); } 
+      catch (err) { console.warn(`⚠️  Failed to delete media file ${r.media_file}:`, err.message); }
     }
   });
 
-  const result = db.prepare(`DELETE FROM messages WHERE user_id = ? AND id IN (${ph})`).run(userId, ...safeIds);
+  // Soft-delete: keep wa_id so the sweep recognises the row and skips
+  // re-backfill / re-download. media-pointer columns always go (we already
+  // unlinked the file on disk). Content columns are preserved for plain
+  // text messages and wiped for everything else.
+  const result = db.prepare(`
+    UPDATE messages SET
+      vault_deleted_at  = strftime('%s','now'),
+      media_file        = NULL,
+      mimetype          = NULL,
+      filename          = NULL,
+      body              = CASE WHEN type IN ('chat','location','vcard','call_log') THEN body              ELSE NULL END,
+      lat               = CASE WHEN type IN ('chat','location','vcard','call_log') THEN lat               ELSE NULL END,
+      lng               = CASE WHEN type IN ('chat','location','vcard','call_log') THEN lng               ELSE NULL END,
+      mentions          = CASE WHEN type IN ('chat','location','vcard','call_log') THEN mentions          ELSE NULL END,
+      vcards            = CASE WHEN type IN ('chat','location','vcard','call_log') THEN vcards            ELSE NULL END,
+      loc_name          = CASE WHEN type IN ('chat','location','vcard','call_log') THEN loc_name          ELSE NULL END,
+      loc_address       = CASE WHEN type IN ('chat','location','vcard','call_log') THEN loc_address       ELSE NULL END,
+      loc_url           = CASE WHEN type IN ('chat','location','vcard','call_log') THEN loc_url           ELSE NULL END,
+      quoted_wa_id      = CASE WHEN type IN ('chat','location','vcard','call_log') THEN quoted_wa_id      ELSE NULL END,
+      poll_options      = CASE WHEN type IN ('chat','location','vcard','call_log') THEN poll_options      ELSE NULL END,
+      call_participants = CASE WHEN type IN ('chat','location','vcard','call_log') THEN call_participants ELSE NULL END,
+      call_duration_sec = CASE WHEN type IN ('chat','location','vcard','call_log') THEN call_duration_sec ELSE NULL END,
+      call_is_video     = CASE WHEN type IN ('chat','location','vcard','call_log') THEN call_is_video     ELSE NULL END
+    WHERE user_id = ? AND id IN (${ph}) AND vault_deleted_at IS NULL
+  `).run(userId, ...safeIds);
 
+  // Recompute chat rollups from the live (non-tombstoned) messages so the
+  // chat list reflects the visible state.
   db.prepare(`
     UPDATE chats SET
-      msg_count   = (SELECT COUNT(*)   FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id),
-      last_body   = (SELECT body       FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id ORDER BY timestamp DESC LIMIT 1),
-      last_type   = (SELECT type       FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id ORDER BY timestamp DESC LIMIT 1),
-      last_msg_at = COALESCE((SELECT timestamp FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id ORDER BY timestamp DESC LIMIT 1), last_msg_at)
+      msg_count   = (SELECT COUNT(*)   FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id AND vault_deleted_at IS NULL),
+      last_body   = (SELECT body       FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id AND vault_deleted_at IS NULL ORDER BY timestamp DESC LIMIT 1),
+      last_type   = (SELECT type       FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id AND vault_deleted_at IS NULL ORDER BY timestamp DESC LIMIT 1),
+      last_msg_at = COALESCE((SELECT timestamp FROM messages WHERE user_id = chats.user_id AND chat_id = chats.chat_id AND vault_deleted_at IS NULL ORDER BY timestamp DESC LIMIT 1), last_msg_at)
     WHERE user_id = ?
   `).run(userId);
   db.prepare(`DELETE FROM chats WHERE user_id = ? AND msg_count = 0`).run(userId);
@@ -542,7 +576,7 @@ function deleteMessages(userId, ids) {
 
 // ── Delete chat ──────────────────────────────────────────────────────────────
 function deleteChat(userId, chatId) {
-  const rows = db.prepare('SELECT media_file FROM messages WHERE user_id = ? AND chat_id = ?').all(userId, chatId);
+  const rows = db.prepare('SELECT media_file FROM messages WHERE user_id = ? AND chat_id = ? AND vault_deleted_at IS NULL').all(userId, chatId);
   rows.forEach(r => {
     if (r.media_file) {
       try { fs.unlinkSync(path.join(MEDIA_DIR, r.media_file)); }
@@ -558,7 +592,31 @@ function deleteChat(userId, chatId) {
   }
   stmts.deleteChatProfileHistory.run(userId, chatId);
 
-  const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
+  // Soft-delete every message in the chat so the sweep recognises the wa_ids
+  // and won't re-backfill them. The chat row itself goes away — if new
+  // messages arrive later, upsertChat will recreate it. Same content rule
+  // as deleteMessages: keep body/etc. for plain text, wipe for everything else.
+  const result = db.prepare(`
+    UPDATE messages SET
+      vault_deleted_at  = strftime('%s','now'),
+      media_file        = NULL,
+      mimetype          = NULL,
+      filename          = NULL,
+      body              = CASE WHEN type IN ('chat','location','vcard','call_log') THEN body              ELSE NULL END,
+      lat               = CASE WHEN type IN ('chat','location','vcard','call_log') THEN lat               ELSE NULL END,
+      lng               = CASE WHEN type IN ('chat','location','vcard','call_log') THEN lng               ELSE NULL END,
+      mentions          = CASE WHEN type IN ('chat','location','vcard','call_log') THEN mentions          ELSE NULL END,
+      vcards            = CASE WHEN type IN ('chat','location','vcard','call_log') THEN vcards            ELSE NULL END,
+      loc_name          = CASE WHEN type IN ('chat','location','vcard','call_log') THEN loc_name          ELSE NULL END,
+      loc_address       = CASE WHEN type IN ('chat','location','vcard','call_log') THEN loc_address       ELSE NULL END,
+      loc_url           = CASE WHEN type IN ('chat','location','vcard','call_log') THEN loc_url           ELSE NULL END,
+      quoted_wa_id      = CASE WHEN type IN ('chat','location','vcard','call_log') THEN quoted_wa_id      ELSE NULL END,
+      poll_options      = CASE WHEN type IN ('chat','location','vcard','call_log') THEN poll_options      ELSE NULL END,
+      call_participants = CASE WHEN type IN ('chat','location','vcard','call_log') THEN call_participants ELSE NULL END,
+      call_duration_sec = CASE WHEN type IN ('chat','location','vcard','call_log') THEN call_duration_sec ELSE NULL END,
+      call_is_video     = CASE WHEN type IN ('chat','location','vcard','call_log') THEN call_is_video     ELSE NULL END
+    WHERE user_id = ? AND chat_id = ? AND vault_deleted_at IS NULL
+  `).run(userId, chatId);
   db.prepare('DELETE FROM chats WHERE user_id = ? AND chat_id = ?').run(userId, chatId);
   return { deleted: result.changes };
 }
