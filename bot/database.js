@@ -303,7 +303,7 @@ const stmts = {
 
   getMimetypeForFile: db.prepare(`SELECT mimetype FROM messages WHERE media_file = ? LIMIT 1`),
 
-  findMessageByWaId: db.prepare(`SELECT id, body FROM messages WHERE user_id = ? AND wa_id = ? LIMIT 1`),
+  findMessageByWaId: db.prepare(`SELECT id, body, revoked_at FROM messages WHERE user_id = ? AND wa_id = ? LIMIT 1`),
   // For the sweep's revoke pass — scope to a chat + minimum timestamp.
   getMessagesInWindow: db.prepare(`
     SELECT id, wa_id, revoked_at FROM messages
