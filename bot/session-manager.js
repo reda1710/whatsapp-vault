@@ -678,14 +678,39 @@ class Session extends EventEmitter {
     if (typeof chat.syncHistory === 'function') {
       chat.syncHistory().catch(() => {});
     }
+    // wwebjs's fetchMessages bails on loadEarlierMsgs once
+    // chat.endOfHistoryTransferType !== 0, which WA flips almost immediately
+    // for linked devices. Reach past the wrapper and call the Store's loader
+    // directly in a loop. If WA refuses to push more, this is a no-op.
+    try {
+      await this.client.pupPage.evaluate(async (cid) => {
+        const c = window.Store?.Chat?.get(cid);
+        if (!c) return 0;
+        const loader = window.Store?.ConversationMsgs?.loadEarlierMsgs;
+        if (typeof loader !== 'function') return 0;
+        for (let i = 0; i < 50; i++) {
+          let loaded;
+          try { loaded = await loader(c); }
+          catch { break; }
+          if (!loaded || !loaded.length) break;
+        }
+      }, chatId);
+    } catch (e) { /* internal Store API may not exist on this build */ }
     let fetched;
     try {
-      fetched = await this._retry(() => chat.fetchMessages({ limit: Infinity }));
+      // Number.MAX_SAFE_INTEGER, not Infinity — Infinity is serialised to
+      // null by Puppeteer's JSON arg encoding, so wwebjs's pagination loop
+      // (gated by `searchOptions.limit > 0`) would never run.
+      fetched = await this._retry(() => chat.fetchMessages({ limit: Number.MAX_SAFE_INTEGER }));
     } catch (e) {
       if (!isHarmless(e.message)) console.warn(`⚠️  [${this.userName}] fetchMessages(${chatId}) failed:`, e.message.split('\n')[0]);
       return;
     }
     if (!fetched?.length) return;
+
+    // Don't archive these noise types (mirrors the live path's _shouldSkip),
+    // but still let their timestamps anchor the window for revoke detection.
+    const SKIP_TYPES = new Set(['e2e_notification','notification_template','notification','gp2','broadcast','protocol','undefined']);
 
     const fetchedIds = new Set();
     let oldestTs = Infinity;
@@ -702,6 +727,7 @@ class Session extends EventEmitter {
       if (this.stopping || !this.client) return;
       const waId = m.id?.id;
       if (!waId) continue;
+      if (SKIP_TYPES.has(m.type)) continue;
       const existing = db.findMessageByWaId(this.userId, waId);
       // wwebjs surfaces a deleted-for-everyone message with type='revoked'
       // and an empty body. Don't mistake that for an edit of our preserved
@@ -727,9 +753,9 @@ class Session extends EventEmitter {
       }
     }
 
-    // Pass 2: anything in our DB inside the fetched window but absent from
-    // the fetch is a delete-for-everyone we missed live. Older rows could
-    // just be out of wwebjs's range — leave them alone.
+    // Anything in our DB inside the fetched window but absent from the fetch
+    // is a delete-for-everyone we missed live. Older rows are out of wwebjs's
+    // range — leave them alone.
     const localInWindow = db.getMessagesInWindow(this.userId, chatId, oldestTs);
     for (const row of localInWindow) {
       if (!row.wa_id || row.revoked_at || fetchedIds.has(row.wa_id)) continue;
