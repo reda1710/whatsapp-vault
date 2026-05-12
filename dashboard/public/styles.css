@@ -480,6 +480,7 @@
   .edit-history-time { font-family: var(--mono); font-size: 10px; color: var(--muted); }
   .edit-history-prev { text-decoration: line-through; color: var(--muted); margin-top: 2px; }
   .edit-history-new  { color: var(--text); margin-top: 2px; }
+  .edit-history-new.edit-history-revoked { text-decoration: line-through; color: var(--muted); }
 
   /* Anchor the popover to the same side as the bubble itself. */
   .msg-wrap.me   .edit-history-popover { right: 0; left: auto; }

@@ -665,10 +665,19 @@ class Session extends EventEmitter {
   // Diff what wwebjs holds for this chat against our DB. Backfills new
   // messages, records edits (body change), and flags revokes for any DB row
   // inside the fetched window that's missing from the fetch.
+  //
+  // fetchMessages only returns wwebjs's local cache — WA doesn't backfill
+  // linked devices automatically. We call syncHistory() first to nudge it,
+  // but it's best-effort.
   async _reconcileChatMessages(chatId) {
     if (!this.client) return;
     const chat = await this._retry(() => this.client.getChatById(chatId));
     if (!chat) return;
+    // syncHistory is async on WA's side (peer-data-operation request) — fire
+    // and forget so the next sweep cycle benefits, not this one.
+    if (typeof chat.syncHistory === 'function') {
+      chat.syncHistory().catch(() => {});
+    }
     let fetched;
     try {
       fetched = await this._retry(() => chat.fetchMessages({ limit: Infinity }));
@@ -694,18 +703,33 @@ class Session extends EventEmitter {
       const waId = m.id?.id;
       if (!waId) continue;
       const existing = db.findMessageByWaId(this.userId, waId);
+      // wwebjs surfaces a deleted-for-everyone message with type='revoked'
+      // and an empty body. Don't mistake that for an edit of our preserved
+      // body, and don't re-revoke something we already know about.
+      const isRevokedStub = m.type === 'revoked';
+
       if (!existing) {
+        // Don't backfill bare revoked stubs — we never had the original.
+        if (isRevokedStub) continue;
         const r = await this._archiveMessage(m, { source: 'backfill' });
         if (r?.messageId) added++;
-      } else if ((existing.body || null) !== (m.body || null)) {
+        continue;
+      }
+      if (existing.revoked_at) continue;
+      if (isRevokedStub) {
+        db.recordRevoke(this.userId, waId, m.timestamp || Math.floor(Date.now()/1000));
+        revoked++;
+        continue;
+      }
+      if ((existing.body || null) !== (m.body || null)) {
         db.recordEdit(this.userId, waId, existing.body, m.body, m.timestamp || Math.floor(Date.now()/1000));
         edited++;
       }
     }
 
-    // Anything in our DB inside the fetched window but absent from the fetch
-    // is a delete-for-everyone we missed live. Older rows could be out of
-    // wwebjs's range — leave them alone.
+    // Pass 2: anything in our DB inside the fetched window but absent from
+    // the fetch is a delete-for-everyone we missed live. Older rows could
+    // just be out of wwebjs's range — leave them alone.
     const localInWindow = db.getMessagesInWindow(this.userId, chatId, oldestTs);
     for (const row of localInWindow) {
       if (!row.wa_id || row.revoked_at || fetchedIds.has(row.wa_id)) continue;
@@ -713,9 +737,7 @@ class Session extends EventEmitter {
       revoked++;
     }
 
-    if (added || edited || revoked) {
-      console.log(`🪡  [${this.userName}/${chatId}] reconcile: +${added} ~${edited} -${revoked}`);
-    }
+    console.log(`🪡  [${this.userName}/${chatId}] reconcile: fetched=${fetched.length} +${added} ~${edited} -${revoked}`);
   }
 
   // Two-phase: every chat (profile + message reconcile), then every unique

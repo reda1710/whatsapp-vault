@@ -609,13 +609,19 @@ async function showEditHistory(messageId) {
     rows = await r.json();
   } catch { return; }
   if (!Array.isArray(rows) || !rows.length) return;
-  const items = rows.map(r => `
+  // If the message is now revoked, the last "new_body" in the history IS
+  // the body that got deleted — strike it too so the popover ends in the
+  // same visual state as the bubble.
+  const isRevoked = !!allMessages.find(m => m.id === messageId)?.revoked_at;
+  const items = rows.map((r, idx) => {
+    const lastClass = (idx === rows.length - 1 && isRevoked) ? ' edit-history-revoked' : '';
+    return `
     <div class="edit-history-item">
       <div class="edit-history-time">${esc(fmtFull(r.edited_at))}</div>
       ${r.prev_body ? `<div class="edit-history-prev">${esc(r.prev_body)}</div>` : ''}
-      <div class="edit-history-new">${esc(r.new_body || '')}</div>
-    </div>
-  `).join('');
+      <div class="edit-history-new${lastClass}">${esc(r.new_body || '')}</div>
+    </div>`;
+  }).join('');
   const wrap = document.querySelector(`.msg-wrap[data-id="${messageId}"]`);
   if (!wrap) return;
   const pop = document.createElement('div');
