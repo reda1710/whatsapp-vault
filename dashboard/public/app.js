@@ -1235,6 +1235,8 @@ async function selectUser(userId) {
   document.body.classList.remove('chat-open');
   updateUserBtn();
   updateReconnectBanner();
+  // Sweep events are per-user; reset banner state when switching.
+  hideSyncBanner();
 
   document.getElementById('chat-header').style.display = 'none';
   document.getElementById('filter-bar').style.display  = 'none';
@@ -1363,6 +1365,24 @@ function updateReconnectBanner() {
   if (!currentUserId) { banner.style.display = 'none'; return; }
   const st = userStatuses[currentUserId];
   banner.style.display = (st === 'qr') ? 'flex' : 'none';
+}
+
+// Sync banner — shown when a sweep has been running for >15s. The bot emits
+// sweep_start/sweep_end over SSE; the 15s threshold is enforced here.
+let syncBannerTimer = null;
+function armSyncBanner() {
+  clearTimeout(syncBannerTimer);
+  syncBannerTimer = setTimeout(showSyncBanner, 15000);
+}
+function showSyncBanner() {
+  const b = document.getElementById('sync-banner');
+  if (b) b.style.display = 'flex';
+}
+function hideSyncBanner() {
+  clearTimeout(syncBannerTimer);
+  syncBannerTimer = null;
+  const b = document.getElementById('sync-banner');
+  if (b) b.style.display = 'none';
 }
 
 async function reconnectCurrentUser() {
@@ -1502,6 +1522,18 @@ function connectSSE() {
     const messageId  = parseInt(bubble.id.replace('poll-', ''), 10);
     const optionCount = parseInt(bubble.dataset.pollOpts || '0', 10);
     refreshPollTally(messageId, pollWaId, optionCount);
+  });
+
+  sseSource.addEventListener('sweep_start', e => {
+    const { userId } = JSON.parse(e.data);
+    if (userId !== currentUserId) return;
+    armSyncBanner();
+  });
+
+  sseSource.addEventListener('sweep_end', e => {
+    const { userId } = JSON.parse(e.data);
+    if (userId !== currentUserId) return;
+    hideSyncBanner();
   });
 
   sseSource.onerror = () => {

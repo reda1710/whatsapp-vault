@@ -14,7 +14,7 @@ const AUTH_BASE     = path.join(__dirname, '..', '.wwebjs_auth');
 const QR_TIMEOUT    = 5 * 60 * 1000;
 const READY_TIMEOUT = 160 * 1000;
 const RECONNECT_DELAY = 8 * 1000;
-const PROFILE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const PROFILE_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
 // Delay before the first sweep so WA finishes its initial chat sync.
 const PROFILE_REFRESH_DELAY_MS    = 60 * 1000;
 const PROFILE_REFRESH_THROTTLE_MS = 500;
@@ -138,6 +138,9 @@ class Session extends EventEmitter {
         executablePath: CHROME_BIN,
         headless: true,
         handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+        // Default is ~30s; heavy sweep ops (fetchMessages on a big chat,
+        // downloadMedia on a large file) can legitimately exceed that.
+        protocolTimeout: 120000,
         args: [
           '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
           '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
@@ -659,8 +662,10 @@ class Session extends EventEmitter {
     if (this.profileRefreshTimer) clearTimeout(this.profileRefreshTimer);
     const tick = async () => {
       if (this.stopping || !this.client) return;
+      this.emit('sweep_start', { userId: this.userId });
       try { await this._refreshAllProfiles(); }
       catch (e) { console.warn(`⚠️  [${this.userName}] profile sweep failed:`, e.message.split('\n')[0]); }
+      this.emit('sweep_end', { userId: this.userId });
       if (this.stopping || !this.client) return;
       this.profileRefreshTimer = setTimeout(tick, PROFILE_REFRESH_INTERVAL_MS);
     };
@@ -872,6 +877,8 @@ class SessionManager extends EventEmitter {
       session.on('message_revoke',  e => this.emit('message_revoke',  e));
       session.on('reaction',        e => this.emit('reaction',        e));
       session.on('vote_update',     e => this.emit('vote_update',     e));
+      session.on('sweep_start',     e => this.emit('sweep_start',     e));
+      session.on('sweep_end',       e => this.emit('sweep_end',       e));
     }
     session.start(); // async, fire-and-forget
     return session;
